@@ -1,0 +1,6 @@
+preset = "basic"
+python-interpreter-path = "venv/Scripts/python.exe"
+search-path = [".", ".."]
+
+[errors]
+missing-import = "error"

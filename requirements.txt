@@ -1,0 +1,26 @@
+# Core Django & REST Framework
+Django>=5.0.0,<5.2.0
+djangorestframework>=3.15.0
+django-cors-headers>=4.3.1
+
+# Database Drivers (MySQL)
+mysqlclient>=2.2.4
+PyMySQL>=1.1.0
+cryptography>=42.0.0
+
+# Authentication
+PyJWT>=2.8.0
+djangorestframework-simplejwt>=5.3.0
+
+# Image & Document Handling
+Pillow>=10.3.0
+pypdf>=4.2.0
+
+# Machine Learning & Demand Prediction
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+joblib>=1.4.0
+
+# Environment Configuration
+python-dotenv>=1.0.1

@@ -1,0 +1,75 @@
+{
+  "model_name": "RandomForestRegressor",
+  "model_version": "v1.0.0",
+  "model_type": "REGRESSION",
+  "training_date": "2026-09-05T20:27:00.296538",
+  "training_samples": 221,
+  "test_samples": 56,
+  "features_used": [
+    "day_of_week",
+    "day_of_month",
+    "month",
+    "week_of_year",
+    "is_weekend",
+    "lag_1",
+    "lag_2",
+    "lag_3",
+    "lag_7",
+    "lag_14",
+    "rolling_mean_3",
+    "rolling_mean_7",
+    "rolling_mean_14",
+    "selling_price",
+    "category_id"
+  ],
+  "feature_importance_or_coef": {
+    "day_of_week": 0.1647,
+    "day_of_month": 0.089,
+    "month": 0.0027,
+    "week_of_year": 0.0291,
+    "is_weekend": 0.1138,
+    "lag_1": 0.081,
+    "lag_2": 0.0534,
+    "lag_3": 0.0454,
+    "lag_7": 0.0591,
+    "lag_14": 0.0876,
+    "rolling_mean_3": 0.0734,
+    "rolling_mean_7": 0.07,
+    "rolling_mean_14": 0.0851,
+    "selling_price": 0.0323,
+    "category_id": 0.0134
+  },
+  "metrics": {
+    "mae": 2.57,
+    "rmse": 3.42,
+    "r2": 0.1246,
+    "mape": 70.07,
+    "sample_count": 56,
+    "explanation": "MAE: \u00b12.6 units average forecast error. RMSE: \u00b13.4 units. R\u00b2 Score: 0.12 (12.5% variance explained)."
+  },
+  "linear_regression_metrics": {
+    "mae": 2.72,
+    "rmse": 3.63,
+    "r2": 0.014,
+    "mape": 78.91,
+    "sample_count": 56,
+    "explanation": "MAE: \u00b12.7 units average forecast error. RMSE: \u00b13.6 units. R\u00b2 Score: 0.01 (1.4% variance explained)."
+  },
+  "random_forest_metrics": {
+    "mae": 2.57,
+    "rmse": 3.42,
+    "r2": 0.1246,
+    "mape": 70.07,
+    "sample_count": 56,
+    "explanation": "MAE: \u00b12.6 units average forecast error. RMSE: \u00b13.4 units. R\u00b2 Score: 0.12 (12.5% variance explained)."
+  },
+  "baseline_metrics": {
+    "mae": 2.91,
+    "rmse": 3.87,
+    "r2": -0.1228,
+    "mape": 65.95,
+    "sample_count": 56,
+    "explanation": "MAE: \u00b12.9 units average forecast error. RMSE: \u00b13.9 units. R\u00b2 Score: -0.12 (0.0% variance explained)."
+  },
+  "baseline_improvement_mae": 0.34
+}
