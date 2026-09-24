@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const resolveApiBaseUrl = () => {
-  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  const envUrl = import.meta.env?.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.trim().replace(/\/+$/, '') : '';
 
   // In browser runtime:
   if (typeof window !== 'undefined' && window.location) {
