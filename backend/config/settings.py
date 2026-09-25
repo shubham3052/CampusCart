@@ -152,6 +152,23 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # Database Configuration (MySQL 8.0)
+DB_OPTIONS = {
+    'charset': 'utf8mb4',
+    'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+}
+
+# SSL/TLS configuration for remote cloud databases (e.g., Aiven MySQL)
+DB_SSL_REQUIRED = os.environ.get('DB_SSL_REQUIRED', 'False').strip().lower() in ('true', '1', 'yes')
+DB_SSL_CA = os.environ.get('DB_SSL_CA', '').strip()
+
+if DB_SSL_REQUIRED:
+    ssl_config = {}
+    if DB_SSL_CA and os.path.isfile(DB_SSL_CA):
+        ssl_config['ca'] = DB_SSL_CA
+    else:
+        ssl_config['check_hostname'] = False
+    DB_OPTIONS['ssl'] = ssl_config
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -160,10 +177,7 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD', ''),
         'HOST': os.environ.get('DB_HOST', '127.0.0.1'),
         'PORT': os.environ.get('DB_PORT', '3306'),
-        'OPTIONS': {
-            'charset': 'utf8mb4',
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-        },
+        'OPTIONS': DB_OPTIONS,
     }
 }
 
