@@ -458,6 +458,7 @@ EMAIL_BACKEND = os.getenv(
 # on cloud hosting platforms such as Render Free.
 # ==============================================================================
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', os.getenv('EMAIL_PROVIDER_API_KEY', '')).strip().strip('\'"')
+BREVO_API_KEY = os.getenv('BREVO_API_KEY', '').strip().strip('\'"')
 EMAIL_FROM_ADDRESS = os.getenv('EMAIL_FROM_ADDRESS', '').strip().strip('\'"')
 EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', 'CampusCart').strip().strip('\'"')
 

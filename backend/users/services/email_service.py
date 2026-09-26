@@ -422,9 +422,20 @@ class EmailService:
 </html>"""
 
         # Dispatch priority:
-        # 1. Resend HTTPS REST API (port 443) when RESEND_API_KEY / EMAIL_PROVIDER_API_KEY is configured
-        api_key = getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')
-        if api_key:
+        # 1. Brevo HTTPS REST API (port 443) when BREVO_API_KEY is configured (allows sending to ANY recipient)
+        brevo_key = str(getattr(settings, 'BREVO_API_KEY', '')).strip().strip('\'"')
+        if brevo_key:
+            return cls._dispatch_via_brevo_api(
+                recipient_email=recipient_email,
+                recipient_name=recipient_name,
+                subject=subject,
+                text_content=text_content,
+                html_content=html_content
+            )
+
+        # 2. Resend HTTPS REST API (port 443) when RESEND_API_KEY / EMAIL_PROVIDER_API_KEY is configured
+        resend_key = str(getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')).strip().strip('\'"')
+        if resend_key:
             return cls._dispatch_via_https_api(
                 recipient_email=recipient_email,
                 subject=subject,
@@ -432,7 +443,7 @@ class EmailService:
                 html_content=html_content
             )
 
-        # 2. Django EmailBackend fallback under automated tests or local development (DEBUG=True)
+        # 3. Django EmailBackend fallback under automated tests or local development (DEBUG=True)
         import sys
         if 'test' in sys.argv or getattr(settings, 'DEBUG', False):
             return cls._dispatch_via_django_email(
@@ -443,14 +454,100 @@ class EmailService:
                 from_email=from_email
             )
 
-        # 3. In production (DEBUG=False) without an API key:
+        # 4. In production (DEBUG=False) without an API key:
         # Avoid hanging on blocked outbound SMTP socket connections (ports 25/465/587)
         masked_email = cls._mask_email(recipient_email)
         logger.error(
-            "[EmailService] Outbound email failed for %s: RESEND_API_KEY is not configured in server environment.",
+            "[EmailService] Outbound email failed for %s: RESEND_API_KEY or BREVO_API_KEY is not configured in server environment.",
             masked_email
         )
-        return False, "Email delivery service is not configured. Please set RESEND_API_KEY in Render environment variables."
+        return False, "Email delivery service is not configured. Please set RESEND_API_KEY or BREVO_API_KEY in Render environment variables."
+
+    @classmethod
+    def _dispatch_via_brevo_api(
+        cls,
+        recipient_email: str,
+        recipient_name: str,
+        subject: str,
+        text_content: str,
+        html_content: str
+    ) -> tuple[bool, str]:
+        """
+        Dispatches email via Brevo (Sendinblue) HTTPS REST API (api.brevo.com/v3/smtp/email:443).
+        Operates over port 443 HTTPS. Supports sending to ANY recipient email address on free tier.
+        Never logs or exposes API keys or secrets.
+        """
+        import json
+        import urllib.request
+        import urllib.error
+
+        api_key = str(getattr(settings, 'BREVO_API_KEY', '')).strip().strip('\'"')
+        if not api_key:
+            return False, "Brevo API key is not configured in server environment."
+
+        from_addr = getattr(settings, 'EMAIL_FROM_ADDRESS', '').strip() or getattr(settings, 'DEFAULT_FROM_EMAIL', '').strip()
+        from_name = getattr(settings, 'EMAIL_FROM_NAME', 'CampusCart').strip()
+        if not from_addr or '@' not in from_addr:
+            from_addr = 'garibhokya@gmail.com'
+
+        payload = {
+            "sender": {
+                "name": from_name,
+                "email": from_addr
+            },
+            "to": [
+                {
+                    "email": recipient_email,
+                    "name": recipient_name
+                }
+            ],
+            "subject": subject,
+            "htmlContent": html_content,
+            "textContent": text_content
+        }
+
+        masked_email = cls._mask_email(recipient_email)
+        logger.info(
+            "[EmailService] Dispatching OTP email to %s via Brevo HTTPS API (api.brevo.com:443)...",
+            masked_email
+        )
+
+        req_bytes = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            'https://api.brevo.com/v3/smtp/email',
+            data=req_bytes,
+            headers={
+                'api-key': api_key,
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            method='POST'
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                logger.info(
+                    "[EmailService] Brevo HTTPS API accepted email for %s (HTTP %d).",
+                    masked_email,
+                    resp.status
+                )
+                return True, "Verification email sent successfully."
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = json.loads(e.read().decode('utf-8'))
+                err_msg = err_body.get('message', str(e))
+            except Exception:
+                err_msg = str(e)
+
+            logger.error("[EmailService] Brevo API Error (%d) for %s: %s", e.code, masked_email, err_msg)
+            return False, f"Email delivery provider error: {err_msg}"
+        except (socket.timeout, urllib.error.URLError, TimeoutError, OSError) as e:
+            logger.error("[EmailService] Network error connecting to Brevo HTTPS API: %s", type(e).__name__)
+            return False, "Could not connect to email delivery service. Please check your network connection."
+        except Exception as e:
+            logger.error("[EmailService] Unexpected error during Brevo email dispatch: %s", type(e).__name__)
+            return False, "Unable to send verification email. Please try again later."
+
 
 
     @classmethod
