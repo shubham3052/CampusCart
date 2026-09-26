@@ -49,13 +49,13 @@ const authService = {
     const refreshToken = data.tokens?.refresh || data.refresh;
     const user = data.user;
 
-    if (accessToken) {
-      localStorage.setItem('access_token', accessToken);
-    }
-    if (refreshToken) {
-      localStorage.setItem('refresh_token', refreshToken);
-    }
-    if (user) {
+    if (user?.email_verified) {
+      if (accessToken) {
+        localStorage.setItem('access_token', accessToken);
+      }
+      if (refreshToken) {
+        localStorage.setItem('refresh_token', refreshToken);
+      }
       localStorage.setItem('user', JSON.stringify(user));
     }
 

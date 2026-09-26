@@ -70,8 +70,10 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const result = await authService.register(userData);
-      setUser(result.user);
-      setAccessToken(result.accessToken);
+      if (result.user?.email_verified) {
+        setUser(result.user);
+        setAccessToken(result.accessToken);
+      }
       return result;
     } finally {
       setLoading(false);

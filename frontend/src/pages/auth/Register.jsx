@@ -292,6 +292,7 @@ const Register = () => {
           isOpen={showOtpModal}
           email={registeredUser?.email || formData.email}
           purpose="EMAIL_VERIFICATION"
+          canDismiss={false}
           onSuccess={() => {
             markEmailVerified();
             const role = registeredUser?.role || formData.role;
@@ -305,14 +306,7 @@ const Register = () => {
           }}
           onClose={() => {
             setShowOtpModal(false);
-            const role = registeredUser?.role || formData.role;
-            if (role === 'STUDENT') {
-              navigate('/student/home', { replace: true });
-            } else if (role === 'SHOP_OWNER') {
-              navigate('/shop-owner/dashboard', { replace: true });
-            } else {
-              navigate('/login', { replace: true });
-            }
+            navigate('/login', { replace: true });
           }}
         />
       )}
