@@ -471,7 +471,7 @@ class EmailService:
         import urllib.request
         import urllib.error
 
-        api_key = getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')
+        api_key = str(getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')).strip().strip('\'"')
         if not api_key:
             return False, "Email delivery API key is not configured in server environment."
 

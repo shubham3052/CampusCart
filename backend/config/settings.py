@@ -457,9 +457,9 @@ EMAIL_BACKEND = os.getenv(
 # Communicates over HTTPS port 443 to bypass outbound SMTP blocks (25/465/587)
 # on cloud hosting platforms such as Render Free.
 # ==============================================================================
-RESEND_API_KEY = os.getenv('RESEND_API_KEY', os.getenv('EMAIL_PROVIDER_API_KEY', '')).strip()
-EMAIL_FROM_ADDRESS = os.getenv('EMAIL_FROM_ADDRESS', '').strip()
-EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', 'CampusCart').strip()
+RESEND_API_KEY = os.getenv('RESEND_API_KEY', os.getenv('EMAIL_PROVIDER_API_KEY', '')).strip().strip('\'"')
+EMAIL_FROM_ADDRESS = os.getenv('EMAIL_FROM_ADDRESS', '').strip().strip('\'"')
+EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', 'CampusCart').strip().strip('\'"')
 
 # Email OTP Security Configuration
 EMAIL_OTP_EXPIRY_SECONDS = int(os.getenv('EMAIL_OTP_EXPIRY_SECONDS', 300))  # 5 minutes
