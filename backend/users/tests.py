@@ -331,3 +331,144 @@ class OrderAndPickupTests(APITestCase):
         }
         res = self.client.post('/api/orders/', payload, format='json')
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+from unittest.mock import patch, MagicMock
+from django.test import override_settings
+from users.services.email_service import EmailService
+from users.models import EmailVerificationOTP
+from datetime import timedelta
+from django.utils import timezone
+import io
+
+class HttpsEmailServiceTests(APITestCase):
+    """
+    Tests for HTTPS Email API Delivery (Resend API) and OTP lifecycle.
+    """
+    def setUp(self):
+        self.email = "student_test_resend@campus.edu"
+        self.user = User.objects.create_user(
+            username=self.email,
+            email=self.email,
+            password="SecurePassword123!",
+            role=User.Role.STUDENT,
+            name="Test Student"
+        )
+
+    def test_otp_generation_and_hashing(self):
+        otp = EmailService.generate_numeric_otp(6)
+        self.assertEqual(len(otp), 6)
+        self.assertTrue(otp.isdigit())
+
+        record = EmailVerificationOTP.objects.create(
+            user=self.user,
+            email=self.email,
+            purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION,
+            expires_at=timezone.now() + timedelta(minutes=5)
+        )
+        record.set_otp(otp)
+        record.save()
+
+        self.assertNotEqual(record.otp_hash, otp)
+        self.assertTrue(record.check_otp(otp))
+        self.assertFalse(record.check_otp("000000"))
+
+    def test_otp_expiry(self):
+        record = EmailVerificationOTP.objects.create(
+            user=self.user,
+            email=self.email,
+            purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION,
+            expires_at=timezone.now() - timedelta(seconds=10)
+        )
+        self.assertTrue(record.is_expired)
+
+        success, msg, _ = EmailService.verify_otp(
+            email=self.email,
+            candidate_otp="123456",
+            purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION
+        )
+        self.assertFalse(success)
+        self.assertIn("expired", msg.lower())
+
+    @override_settings(RESEND_API_KEY="re_test_dummy_key")
+    def test_https_email_service_success(self):
+        with patch('urllib.request.urlopen') as mock_urlopen:
+            mock_response = MagicMock()
+            mock_response.status = 200
+            mock_response.read.return_value = b'{"id": "msg_mock_12345"}'
+            mock_urlopen.return_value.__enter__.return_value = mock_response
+
+            sent, msg, record = EmailService.create_and_send_otp(
+                email="fresh_test_email@campus.edu",
+                purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION,
+                user=self.user
+            )
+            self.assertTrue(sent)
+            self.assertIn("sent", msg.lower())
+            self.assertIsNotNone(record)
+
+    @override_settings(RESEND_API_KEY="re_test_dummy_key")
+    def test_https_email_service_provider_rejection(self):
+        import urllib.error
+        with patch('urllib.request.urlopen') as mock_urlopen:
+            err = urllib.error.HTTPError(
+                url='https://api.resend.com/emails',
+                code=422,
+                msg='Unprocessable Entity',
+                hdrs={},
+                fp=io.BytesIO(b'{"message": "Domain not verified"}')
+            )
+            mock_urlopen.side_effect = err
+
+            sent, msg, record = EmailService.create_and_send_otp(
+                email="fail_test_email@campus.edu",
+                purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION
+            )
+            self.assertFalse(sent)
+            self.assertIn("Domain not verified", msg)
+            self.assertIsNone(record)
+
+    def test_registration_and_otp_verification_flow(self):
+        reg_payload = {
+            "name": "Kavita Rao",
+            "email": "kavita.rao@campus.edu",
+            "phone": "9876543211",
+            "password": "SecurePassword123!",
+            "role": "STUDENT"
+        }
+        res = self.client.post('/api/auth/register/', reg_payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        user = User.objects.get(email="kavita.rao@campus.edu")
+        self.assertFalse(user.email_verified)
+
+        # Retrieve active OTP
+        otp_rec = EmailVerificationOTP.objects.filter(
+            email="kavita.rao@campus.edu",
+            purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION
+        ).latest('created_at')
+
+        # Generate candidate and verify
+        raw_otp = "852963"
+        otp_rec.set_otp(raw_otp)
+        otp_rec.save()
+
+        verify_res = self.client.post('/api/auth/email/verify-otp/', {
+            "email": "kavita.rao@campus.edu",
+            "otp": raw_otp,
+            "purpose": "EMAIL_VERIFICATION"
+        }, format='json')
+        self.assertEqual(verify_res.status_code, status.HTTP_200_OK)
+
+        user.refresh_from_db()
+        self.assertTrue(user.email_verified)
+
+        # Test login after verification
+        login_res = self.client.post('/api/auth/login/', {
+            "email": "kavita.rao@campus.edu",
+            "password": "SecurePassword123!"
+        }, format='json')
+        self.assertEqual(login_res.status_code, status.HTTP_200_OK)
+        self.assertIn('access', login_res.data)
+        self.assertTrue(login_res.data['user']['email_verified'])
+

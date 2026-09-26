@@ -421,6 +421,131 @@ class EmailService:
 </body>
 </html>"""
 
+        # Dispatch priority:
+        # 1. Resend HTTPS REST API (port 443) when RESEND_API_KEY / EMAIL_PROVIDER_API_KEY is configured
+        # 2. Django EmailBackend fallback (Console in DEBUG, locmem in tests, or SMTP if configured)
+        api_key = getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')
+        if api_key:
+            return cls._dispatch_via_https_api(
+                recipient_email=recipient_email,
+                subject=subject,
+                text_content=text_content,
+                html_content=html_content
+            )
+
+        return cls._dispatch_via_django_email(
+            recipient_email=recipient_email,
+            subject=subject,
+            text_content=text_content,
+            html_content=html_content,
+            from_email=from_email
+        )
+
+    @classmethod
+    def _dispatch_via_https_api(
+        cls,
+        recipient_email: str,
+        subject: str,
+        text_content: str,
+        html_content: str
+    ) -> tuple[bool, str]:
+        """
+        Dispatches email via Resend HTTPS REST API (api.resend.com:443).
+        Communicates strictly over HTTPS port 443, bypassing blocked outbound SMTP ports
+        (25/465/587) on cloud hosts like Render Free.
+        Never logs or exposes API keys or secrets.
+        """
+        import json
+        import urllib.request
+        import urllib.error
+
+        api_key = getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')
+        if not api_key:
+            return False, "Email delivery API key is not configured in server environment."
+
+        from_addr = getattr(settings, 'EMAIL_FROM_ADDRESS', '').strip()
+        from_name = getattr(settings, 'EMAIL_FROM_NAME', 'CampusCart').strip()
+
+        if not from_addr:
+            default_from = getattr(settings, 'DEFAULT_FROM_EMAIL', '').strip()
+            if default_from and '@' in default_from and not any(d in default_from for d in ('example.com', 'campuscart.edu')):
+                from_addr = default_from
+            else:
+                from_addr = 'onboarding@resend.dev'
+
+        if '<' not in from_addr:
+            sender_header = f"{from_name} <{from_addr}>"
+        else:
+            sender_header = from_addr
+
+        payload = {
+            "from": sender_header,
+            "to": [recipient_email],
+            "subject": subject,
+            "text": text_content,
+            "html": html_content
+        }
+
+        masked_email = cls._mask_email(recipient_email)
+        logger.info(
+            "[EmailService] Dispatching OTP email to %s via Resend HTTPS API (api.resend.com:443)...",
+            masked_email
+        )
+
+        req_bytes = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            'https://api.resend.com/emails',
+            data=req_bytes,
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+                'User-Agent': 'CampusCart-Backend/1.0'
+            },
+            method='POST'
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                logger.info(
+                    "[EmailService] Resend HTTPS API accepted email for %s (HTTP %d).",
+                    masked_email,
+                    resp.status
+                )
+                return True, "Verification email sent successfully."
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = json.loads(e.read().decode('utf-8'))
+                err_msg = err_body.get('message', str(e))
+            except Exception:
+                err_msg = str(e)
+
+            logger.error("[EmailService] Resend API Error (%d) for %s: %s", e.code, masked_email, err_msg)
+            if e.code in (401, 403):
+                return False, "Email delivery authentication failed. Please verify provider API key configuration."
+            elif e.code == 422:
+                return False, f"Email delivery provider error: {err_msg}"
+            return False, "Email delivery service rejected the request. Please try again later."
+        except (socket.timeout, urllib.error.URLError, TimeoutError, OSError) as e:
+            logger.error("[EmailService] Network error connecting to Resend HTTPS API: %s", type(e).__name__)
+            return False, "Could not connect to email delivery service. Please check your network connection."
+        except Exception as e:
+            logger.error("[EmailService] Unexpected error during HTTPS email dispatch: %s", type(e).__name__)
+            return False, "Unable to send verification email. Please try again later."
+
+    @classmethod
+    def _dispatch_via_django_email(
+        cls,
+        recipient_email: str,
+        subject: str,
+        text_content: str,
+        html_content: str,
+        from_email: str
+    ) -> tuple[bool, str]:
+        """
+        Fallback email dispatch using Django's configured EMAIL_BACKEND.
+        Used for local development (console backend), test suite (locmem outbox),
+        or when an HTTPS API key is not configured.
+        """
         msg = EmailMultiAlternatives(
             subject=subject,
             body=text_content,
@@ -436,15 +561,14 @@ class EmailService:
         if is_console:
             logger.info(
                 "[EmailService Diagnostics] Dispatched OTP for %s using ConsoleBackend (check server terminal; "
-                "Gmail SMTP credentials are not configured in backend/.env).",
+                "Resend API key is not configured).",
                 masked_email
             )
         else:
             logger.info(
-                "[EmailService Diagnostics] Dispatched OTP for %s using SMTPBackend (%s:%s).",
+                "[EmailService Diagnostics] Dispatched OTP for %s using Django EmailBackend (%s).",
                 masked_email,
-                getattr(settings, 'EMAIL_HOST', 'smtp.gmail.com'),
-                getattr(settings, 'EMAIL_PORT', 587)
+                backend_name
             )
 
         try:
@@ -462,3 +586,4 @@ class EmailService:
         except Exception as e:
             logger.error("Email dispatch failed: %s", type(e).__name__)
             return False, "Unable to send verification email. Please try again later."
+
