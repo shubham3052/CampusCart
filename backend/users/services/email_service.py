@@ -423,7 +423,6 @@ class EmailService:
 
         # Dispatch priority:
         # 1. Resend HTTPS REST API (port 443) when RESEND_API_KEY / EMAIL_PROVIDER_API_KEY is configured
-        # 2. Django EmailBackend fallback (Console in DEBUG, locmem in tests, or SMTP if configured)
         api_key = getattr(settings, 'RESEND_API_KEY', '') or getattr(settings, 'EMAIL_PROVIDER_API_KEY', '')
         if api_key:
             return cls._dispatch_via_https_api(
@@ -433,13 +432,26 @@ class EmailService:
                 html_content=html_content
             )
 
-        return cls._dispatch_via_django_email(
-            recipient_email=recipient_email,
-            subject=subject,
-            text_content=text_content,
-            html_content=html_content,
-            from_email=from_email
+        # 2. Django EmailBackend fallback under automated tests or local development (DEBUG=True)
+        import sys
+        if 'test' in sys.argv or getattr(settings, 'DEBUG', False):
+            return cls._dispatch_via_django_email(
+                recipient_email=recipient_email,
+                subject=subject,
+                text_content=text_content,
+                html_content=html_content,
+                from_email=from_email
+            )
+
+        # 3. In production (DEBUG=False) without an API key:
+        # Avoid hanging on blocked outbound SMTP socket connections (ports 25/465/587)
+        masked_email = cls._mask_email(recipient_email)
+        logger.error(
+            "[EmailService] Outbound email failed for %s: RESEND_API_KEY is not configured in server environment.",
+            masked_email
         )
+        return False, "Email delivery service is not configured. Please set RESEND_API_KEY in Render environment variables."
+
 
     @classmethod
     def _dispatch_via_https_api(
