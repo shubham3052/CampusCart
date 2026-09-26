@@ -280,7 +280,8 @@ class AdminResendInvitationOTPView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        email_clean = request.data.get('email', '').strip().lower()
+        raw_email = request.data.get('email') if isinstance(request.data, dict) else ''
+        email_clean = str(raw_email).strip().lower() if raw_email is not None else ''
         if not email_clean:
             return Response({"success": False, "message": "Email is required."}, status=status.HTTP_400_BAD_REQUEST)
 

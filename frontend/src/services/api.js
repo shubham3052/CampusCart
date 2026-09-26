@@ -1,7 +1,30 @@
 import axios from 'axios';
 
+const PRODUCTION_API_URL = 'https://campuscart-backend-u8k0.onrender.com/api';
+const LOCAL_API_URL = 'http://127.0.0.1:8000/api';
+
+/**
+ * Normalizes an API base URL so that it always includes the /api prefix
+ * without creating duplicate trailing slashes or duplicate /api/api segments.
+ */
+export const normalizeApiUrl = (url) => {
+  if (!url || typeof url !== 'string') return '';
+  let trimmed = url.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (!trimmed.endsWith('/api')) {
+    trimmed = `${trimmed}/api`;
+  }
+  return trimmed;
+};
+
+/**
+ * Resolves the appropriate API base URL based on environment variables,
+ * dev server proxy configuration, and runtime hostname.
+ */
 const resolveApiBaseUrl = () => {
-  const envUrl = import.meta.env?.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.trim().replace(/\/+$/, '') : '';
+  const envUrl = import.meta.env?.VITE_API_BASE_URL
+    ? normalizeApiUrl(import.meta.env.VITE_API_BASE_URL)
+    : '';
 
   // In browser runtime:
   if (typeof window !== 'undefined' && window.location) {
@@ -13,6 +36,9 @@ const resolveApiBaseUrl = () => {
     // through the Vite proxy (Node.js) without encountering Windows Firewall blocks
     // on port 8000, CORS origin issues, or outdated IP mismatches.
     if (port === '5174' || port === '5173') {
+      if (envUrl && envUrl.startsWith('https://')) {
+        return envUrl;
+      }
       return '/api';
     }
 
@@ -21,10 +47,21 @@ const resolveApiBaseUrl = () => {
     if (isLanIp) {
       return `${protocol}//${hostname}:8000/api`;
     }
+
+    const isLoopback = hostname === 'localhost' || hostname === '127.0.0.1';
+
+    // If running on a public domain (e.g., campus-cart-steel.vercel.app):
+    // Prioritize explicit non-localhost envUrl, or fallback to the live Render backend.
+    if (!isLoopback) {
+      if (envUrl && !envUrl.includes('localhost') && !envUrl.includes('127.0.0.1')) {
+        return envUrl;
+      }
+      return PRODUCTION_API_URL;
+    }
   }
 
-  // Strictly honor configured VITE_API_BASE_URL (defaults to http://127.0.0.1:8000/api)
-  return envUrl || 'http://127.0.0.1:8000/api';
+  // Local development / build fallback:
+  return envUrl || LOCAL_API_URL;
 };
 
 export const API_BASE_URL = resolveApiBaseUrl();
@@ -79,14 +116,21 @@ api.interceptors.response.use(
 
     // Handle Network Error or no response from server
     if (!error.response) {
-      const isMobileOrLan =
-        typeof window !== 'undefined' &&
-        window.location?.hostname &&
-        !['localhost', '127.0.0.1'].includes(window.location.hostname);
+      let message = 'Network Error: Cannot connect to CampusCart backend. Please ensure the server is running.';
 
-      const message = isMobileOrLan
-        ? 'Network Error: Cannot connect to CampusCart backend. Please ensure Django is running on 0.0.0.0:8000 and your mobile is on the same Wi-Fi network.'
-        : 'Network Error: Please ensure the Django backend server is running on port 8000.';
+      if (typeof window !== 'undefined' && window.location?.hostname) {
+        const { hostname } = window.location;
+        const isLanIp = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) && !hostname.startsWith('127.');
+        const isLocal = hostname === 'localhost' || hostname === '127.0.0.1';
+
+        if (isLanIp) {
+          message = 'Network Error: Cannot connect to CampusCart backend. Please ensure Django is running on 0.0.0.0:8000 and your mobile is on the same Wi-Fi network.';
+        } else if (isLocal) {
+          message = 'Network Error: Please ensure the Django backend server is running on port 8000.';
+        } else {
+          message = 'Network Error: Unable to connect to the CampusCart production backend. Please check your internet connection or verify the server status.';
+        }
+      }
 
       return Promise.reject({
         message,

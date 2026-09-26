@@ -98,7 +98,8 @@ class LoginView(APIView):
     )
     def post(self, request):
         ip = AuditService.get_client_ip(request)
-        email = request.data.get('email', '').strip().lower()
+        raw_email = request.data.get('email') if isinstance(request.data, dict) else ''
+        email = str(raw_email).strip().lower() if raw_email is not None else ''
         serializer = LoginSerializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
