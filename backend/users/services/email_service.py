@@ -533,10 +533,10 @@ class EmailService:
 
             logger.error("[EmailService] Resend API Error (%d) for %s: %s", e.code, masked_email, err_msg)
             if e.code in (401, 403):
-                return False, "Email delivery authentication failed. Please verify provider API key configuration."
+                return False, f"Email delivery authentication failed: {err_msg}. Please verify provider API key configuration."
             elif e.code == 422:
                 return False, f"Email delivery provider error: {err_msg}"
-            return False, "Email delivery service rejected the request. Please try again later."
+            return False, f"Email delivery service rejected the request: {err_msg}. Please try again later."
         except (socket.timeout, urllib.error.URLError, TimeoutError, OSError) as e:
             logger.error("[EmailService] Network error connecting to Resend HTTPS API: %s", type(e).__name__)
             return False, "Could not connect to email delivery service. Please check your network connection."
