@@ -521,3 +521,41 @@ button, input, select, textarea {
   }
 }
 
+/* ============================================================ */
+/* Map Stacking & Header Containment (Prevents overlaying navbar/branding) */
+/* ============================================================ */
+.campus-map-wrapper,
+.leaflet-container {
+  isolation: isolate;
+  position: relative;
+  z-index: 1 !important;
+}
+
+.campus-map-wrapper .leaflet-pane,
+.leaflet-container .leaflet-pane {
+  z-index: 10 !important;
+}
+
+.campus-map-wrapper .leaflet-control,
+.leaflet-container .leaflet-control {
+  z-index: 15 !important;
+}
+
+.campus-map-wrapper .leaflet-top,
+.campus-map-wrapper .leaflet-bottom,
+.leaflet-container .leaflet-top,
+.leaflet-container .leaflet-bottom {
+  z-index: 20 !important;
+}
+
+/* Ensure sticky headers and modals always sit cleanly above in-page map canvas */
+.app-header,
+.courier-header {
+  z-index: 50 !important;
+}
+
+.modal-overlay,
+.sidebar-mobile-backdrop {
+  z-index: 90 !important;
+}
+

@@ -37,10 +37,17 @@ def authenticate(user):
 def clear_auth():
     client.credentials()
 
+from django.conf import settings
+from django.core import mail
+
 def run_all_tests():
     print("=" * 75)
     print("RUNNING STEP 8 COMPREHENSIVE BACKEND API & SECURITY TEST SUITE")
     print("=" * 75)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     # -------------------------------------------------------------
     # 1. Health Check

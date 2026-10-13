@@ -37,7 +37,25 @@ class UserViewSet(viewsets.ModelViewSet):
         DELETE /api/users/{id}/
         Prevent direct deletion of accounts to safeguard database integrity,
         audit history, student orders, payments, reviews, and print jobs.
+        Platform Owner deletion attempts are strictly forbidden.
         """
+        target = self.get_object()
+        if target.is_platform_owner or target.has_role(User.Role.PLATFORM_OWNER) or target.email.lower() == 'garibhokya@gmail.com':
+            from users.models import AuditLog
+            from users.services.audit_service import AuditService
+            AuditService.log(
+                action=AuditLog.Action.OWNER_REJECTED_DELETION,
+                actor=request.user,
+                actor_email=request.user.email,
+                target_model='User',
+                target_id=str(target.id),
+                metadata={"operation": "DELETE_OWNER_REJECTED", "reason": "Platform Owner cannot be deleted."},
+                request=request
+            )
+            return Response(
+                {"success": False, "message": "The Platform Owner account cannot be deleted."},
+                status=status.HTTP_403_FORBIDDEN
+            )
         return Response(
             {
                 "success": False,
@@ -49,6 +67,26 @@ class UserViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_405_METHOD_NOT_ALLOWED
         )
+
+    def update(self, request, *args, **kwargs):
+        target = self.get_object()
+        if (target.is_platform_owner or target.has_role(User.Role.PLATFORM_OWNER) or target.email.lower() == 'garibhokya@gmail.com') and request.user != target:
+            from users.models import AuditLog
+            from users.services.audit_service import AuditService
+            AuditService.log(
+                action=AuditLog.Action.OWNER_REJECTED_MODIFICATION,
+                actor=request.user,
+                actor_email=request.user.email,
+                target_model='User',
+                target_id=str(target.id),
+                metadata={"operation": "UPDATE_OWNER_REJECTED", "reason": "Platform Owner account cannot be modified by another user."},
+                request=request
+            )
+            return Response(
+                {"success": False, "message": "Platform Owner account cannot be modified by another user."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        return super().update(request, *args, **kwargs)
 
     def get_queryset(self):
         user = self.request.user
@@ -206,7 +244,7 @@ class UserViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         target_user = self.get_object()
-        if target_user.role != User.Role.DELIVERY_AGENT:
+        if target_user.role != User.Role.DELIVERY_AGENT and not target_user.has_role(User.Role.DELIVERY_AGENT):
             return Response(
                 {"success": False, "message": "Target account is not a courier / delivery partner."},
                 status=status.HTTP_400_BAD_REQUEST
@@ -256,7 +294,7 @@ class UserViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         target_user = self.get_object()
-        if target_user.role != User.Role.DELIVERY_AGENT:
+        if target_user.role != User.Role.DELIVERY_AGENT and not target_user.has_role(User.Role.DELIVERY_AGENT):
             return Response(
                 {"success": False, "message": "Target account is not a courier / delivery partner."},
                 status=status.HTTP_400_BAD_REQUEST

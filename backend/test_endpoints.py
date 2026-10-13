@@ -19,10 +19,17 @@ from delivery.models import PickupSlot
 User = get_user_model()
 client = APIClient()
 
+from django.conf import settings
+from django.core import mail
+
 def run_tests():
     print("=" * 60)
     print("RUNNING SMART STATIONERY REST API VERIFICATION SUITE")
     print("=" * 60)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     # 1. Health API
     res = client.get('/api/health/')

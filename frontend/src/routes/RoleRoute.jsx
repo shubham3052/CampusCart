@@ -14,21 +14,22 @@ const RoleRoute = ({ allowedRole }) => {
     return <Navigate to="/login" replace />;
   }
 
-  // If user role does not match allowed role, redirect to appropriate role portal
-  if (user.role !== allowedRole) {
-    if (user.role === 'PLATFORM_OWNER') {
+  // If user active role does not match allowed role, redirect to appropriate role portal
+  const currentRole = user.active_role || user.role;
+  if (currentRole !== allowedRole) {
+    if (currentRole === 'PLATFORM_OWNER') {
       return <Navigate to="/platform-owner/dashboard" replace />;
     }
-    if (user.role === 'STUDENT') {
+    if (currentRole === 'STUDENT') {
       return <Navigate to="/student/home" replace />;
     }
-    if (user.role === 'SHOP_OWNER') {
+    if (currentRole === 'SHOP_OWNER') {
       return <Navigate to="/shop-owner/dashboard" replace />;
     }
-    if (user.role === 'DELIVERY_AGENT') {
+    if (currentRole === 'DELIVERY_AGENT') {
       return <Navigate to="/delivery-agent/deliveries" replace />;
     }
-    if (user.role === 'ADMIN') {
+    if (currentRole === 'ADMIN') {
       return <Navigate to="/admin/dashboard" replace />;
     }
     return <Navigate to="/login" replace />;

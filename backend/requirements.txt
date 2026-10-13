@@ -12,6 +12,8 @@ cryptography>=42.0.0
 # Authentication & JWT
 PyJWT>=2.8.0
 djangorestframework-simplejwt>=5.3.0
+pyotp>=2.9.0
+qrcode>=8.0.0
 
 # Image & Document Handling
 Pillow>=10.3.0

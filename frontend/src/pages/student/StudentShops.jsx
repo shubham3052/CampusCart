@@ -372,7 +372,7 @@ const StudentShops = () => {
           <GoogleMapView
             center={activePosition}
             zoom={15}
-            height="420px"
+            height="clamp(280px, 45vh, 420px)"
             showCurrentLocation={!!userCoords}
             currentLocation={userCoords}
             markers={mapMarkers}

@@ -1,0 +1,12 @@
+{
+  "venvPath": ".",
+  "venv": "venv",
+  "extraPaths": [
+    ".",
+    ".."
+  ],
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "error",
+  "reportAttributeAccessIssue": "none",
+  "reportOptionalSubscript": "none"
+}

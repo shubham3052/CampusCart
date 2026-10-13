@@ -8,9 +8,18 @@ from rest_framework.views import APIView
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from django.core import signing
 from users.permissions import IsPlatformOwner
-from users.models import AuditLog
+from users.models import AuditLog, EmailVerificationOTP, PlatformOwnerTOTP
 from users.services.audit_service import AuditService
+from users.services.email_service import EmailService
+from users.services.totp_service import OwnerTOTPService
+from users.auth_serializers import (
+    OwnerPasswordChangeStartSerializer,
+    OwnerPasswordChangeVerifyEmailSerializer,
+    OwnerPasswordChangeVerifyTOTPSerializer,
+    OwnerPasswordChangeCompleteSerializer,
+)
 from shops.models import Shop
 from orders.models import Order, Payment, Refund, Coupon
 from inventory.models import Inventory
@@ -807,26 +816,391 @@ class PlatformOwnerProfileView(APIView):
 class PlatformOwnerChangePasswordView(APIView):
     """
     POST /api/platform-owner/change-password/
-    Securely changes password after verifying the existing password.
+    Legacy direct password change endpoint - strictly disabled for Platform Owner.
+    Full 2FA (Gmail OTP and Microsoft Authenticator TOTP) is required.
     """
     permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
 
     def post(self, request):
-        serializer = ChangePasswordSerializer(data=request.data)
+        return Response(
+            {
+                "success": False,
+                "message": "Direct password change is disabled for Platform Owner. Full Two-Factor Authentication (Gmail OTP and Microsoft Authenticator) is required via /api/platform-owner/security/password-change/."
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+
+class PlatformOwnerPasswordChangeStartView(APIView):
+    """
+    POST /api/platform-owner/security/password-change/start/
+    Stage 1: Validates current password, verifies active TOTP requirement, and dispatches Gmail OTP.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        serializer = OwnerPasswordChangeStartSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         user = request.user
-        current_pw = serializer.validated_data['current_password']
-        new_pw = serializer.validated_data['new_password']
+        current_password = serializer.validated_data['current_password']
 
-        if not user.check_password(current_pw):
+        # Verify Owner role
+        if not (getattr(user, 'is_platform_owner', False) or user.has_role(User.Role.PLATFORM_OWNER) or user.email.lower() == 'garibhokya@gmail.com'):
             return Response(
-                {"current_password": ["Current password does not match our records."]},
+                {"success": False, "message": "Only Platform Owner accounts can access this endpoint."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Verify current password
+        if not user.check_password(current_password):
+            AuditService.log(
+                action=AuditLog.Action.OWNER_PASSWORD_CHANGE_FAILURE,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"reason": "INVALID_CURRENT_PASSWORD"},
+                request=request
+            )
+            return Response(
+                {"success": False, "message": "Current password does not match our records."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        user.set_password(new_pw)
+        # Enforce that Microsoft Authenticator TOTP is active
+        totp_config = PlatformOwnerTOTP.objects.filter(user=user).first()
+        if not (totp_config and totp_config.enabled and totp_config.verified):
+            AuditService.log(
+                action=AuditLog.Action.OWNER_PASSWORD_CHANGE_FAILURE,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"reason": "TOTP_NOT_ACTIVE"},
+                request=request
+            )
+            return Response(
+                {
+                    "success": False,
+                    "message": "Microsoft Authenticator (TOTP) must be enabled and active on your account before changing your password. Please complete TOTP enrollment in Security settings."
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        AuditService.log(
+            action=AuditLog.Action.OWNER_PASSWORD_CHANGE_STARTED,
+            actor=user,
+            actor_email=user.email,
+            target_model='User',
+            target_id=str(user.id),
+            metadata={"stage": "STARTED"},
+            request=request
+        )
+
+        AuditService.log(
+            action=AuditLog.Action.OWNER_PASSWORD_CHANGE_PASSWORD_VERIFIED,
+            actor=user,
+            actor_email=user.email,
+            target_model='User',
+            target_id=str(user.id),
+            metadata={"stage": "PASSWORD_VERIFIED"},
+            request=request
+        )
+
+        # Dispatch 6-digit Gmail OTP to registered Owner email
+        sent, dispatch_msg, otp_rec = EmailService.create_and_send_otp(
+            email=user.email,
+            purpose=EmailVerificationOTP.Purpose.OWNER_PASSWORD_CHANGE,
+            user=user
+        )
+
+        if not sent:
+            return Response(
+                {"success": False, "message": dispatch_msg},
+                status=status.HTTP_429_TOO_MANY_REQUESTS if ("wait" in dispatch_msg or "limit" in dispatch_msg) else status.HTTP_400_BAD_REQUEST
+            )
+
+        AuditService.log(
+            action=AuditLog.Action.OWNER_PASSWORD_CHANGE_OTP_SENT,
+            actor=user,
+            actor_email=user.email,
+            target_model='User',
+            target_id=str(user.id),
+            metadata={"otp_id": otp_rec.id if otp_rec else None},
+            request=request
+        )
+
+        stage_token = signing.dumps(
+            {
+                'user_id': user.id,
+                'email': user.email.lower(),
+                'purpose': 'OWNER_PASSWORD_CHANGE',
+                'stage': 'PASSWORD_VERIFIED',
+                'ts': timezone.now().timestamp()
+            },
+            salt='owner-password-change-salt'
+        )
+
+        return Response(
+            {
+                "success": True,
+                "stage": "PASSWORD_VERIFIED",
+                "stage_token": stage_token,
+                "email": user.email,
+                "message": "Current password confirmed. A 6-digit verification code has been sent to your registered Platform Owner email."
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class PlatformOwnerPasswordChangeVerifyEmailView(APIView):
+    """
+    POST /api/platform-owner/security/password-change/verify-email/
+    Stage 2: Verifies Gmail OTP and advances challenge to Microsoft Authenticator stage.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        serializer = OwnerPasswordChangeVerifyEmailSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        stage_token = serializer.validated_data['stage_token']
+        code = serializer.validated_data['code']
+
+        try:
+            payload = signing.loads(stage_token, salt='owner-password-change-salt', max_age=300)
+        except signing.SignatureExpired:
+            return Response(
+                {"success": False, "message": "Password change session expired. Please start again."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except signing.BadSignature:
+            return Response(
+                {"success": False, "message": "Invalid password change token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('purpose') != 'OWNER_PASSWORD_CHANGE' or payload.get('stage') != 'PASSWORD_VERIFIED':
+            return Response(
+                {"success": False, "message": "Invalid password change stage."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('user_id') != user.id or payload.get('email', '').lower() != user.email.lower():
+            return Response(
+                {"success": False, "message": "Password change challenge was issued to a different account."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Verify Gmail OTP
+        success, message, otp_rec = EmailService.verify_otp(
+            email=user.email,
+            candidate_otp=code,
+            purpose=EmailVerificationOTP.Purpose.OWNER_PASSWORD_CHANGE,
+            user=user
+        )
+
+        if not success:
+            AuditService.log(
+                action=AuditLog.Action.OWNER_PASSWORD_CHANGE_OTP_FAILED,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"reason": message},
+                request=request
+            )
+            return Response({"success": False, "message": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        AuditService.log(
+            action=AuditLog.Action.OWNER_PASSWORD_CHANGE_OTP_SUCCESS,
+            actor=user,
+            actor_email=user.email,
+            target_model='User',
+            target_id=str(user.id),
+            metadata={"otp_id": otp_rec.id if otp_rec else None},
+            request=request
+        )
+
+        next_token = signing.dumps(
+            {
+                'user_id': user.id,
+                'email': user.email.lower(),
+                'purpose': 'OWNER_PASSWORD_CHANGE',
+                'stage': 'EMAIL_OTP_VERIFIED',
+                'ts': timezone.now().timestamp()
+            },
+            salt='owner-password-change-salt'
+        )
+
+        return Response(
+            {
+                "success": True,
+                "stage": "EMAIL_OTP_VERIFIED",
+                "stage_token": next_token,
+                "message": "Email verification code confirmed. Please enter your 6-digit code from Microsoft Authenticator."
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class PlatformOwnerPasswordChangeVerifyTOTPView(APIView):
+    """
+    POST /api/platform-owner/security/password-change/verify-totp/
+    Stage 3: Verifies Microsoft Authenticator TOTP and issues full MFA authorization token.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        serializer = OwnerPasswordChangeVerifyTOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        stage_token = serializer.validated_data['stage_token']
+        code = serializer.validated_data['code']
+
+        try:
+            payload = signing.loads(stage_token, salt='owner-password-change-salt', max_age=300)
+        except signing.SignatureExpired:
+            return Response(
+                {"success": False, "message": "Password change session expired. Please start again."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except signing.BadSignature:
+            return Response(
+                {"success": False, "message": "Invalid password change token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('purpose') != 'OWNER_PASSWORD_CHANGE' or payload.get('stage') != 'EMAIL_OTP_VERIFIED':
+            return Response(
+                {"success": False, "message": "Invalid password change stage."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('user_id') != user.id or payload.get('email', '').lower() != user.email.lower():
+            return Response(
+                {"success": False, "message": "Password change challenge was issued to a different account."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Verify TOTP code via OwnerTOTPService
+        valid, msg = OwnerTOTPService.verify_login_code(user, code, request=request)
+        if not valid:
+            AuditService.log(
+                action=AuditLog.Action.OWNER_PASSWORD_CHANGE_TOTP_FAILED,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"reason": msg},
+                request=request
+            )
+            return Response({"success": False, "message": msg}, status=status.HTTP_400_BAD_REQUEST)
+
+        AuditService.log(
+            action=AuditLog.Action.OWNER_PASSWORD_CHANGE_TOTP_SUCCESS,
+            actor=user,
+            actor_email=user.email,
+            target_model='User',
+            target_id=str(user.id),
+            metadata={"stage": "TOTP_VERIFIED"},
+            request=request
+        )
+
+        auth_token = signing.dumps(
+            {
+                'user_id': user.id,
+                'email': user.email.lower(),
+                'purpose': 'OWNER_PASSWORD_CHANGE',
+                'stage': 'FULL_MFA_VERIFIED',
+                'ts': timezone.now().timestamp()
+            },
+            salt='owner-password-change-salt'
+        )
+
+        return Response(
+            {
+                "success": True,
+                "stage": "FULL_MFA_VERIFIED",
+                "stage_token": auth_token,
+                "message": "Microsoft Authenticator verified. You may now set your new password."
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class PlatformOwnerPasswordChangeCompleteView(APIView):
+    """
+    POST /api/platform-owner/security/password-change/complete/
+    Stage 4: Verifies full MFA authorization token, updates password, and invalidates all existing sessions.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        serializer = OwnerPasswordChangeCompleteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        stage_token = serializer.validated_data['stage_token']
+        new_password = serializer.validated_data['new_password']
+
+        try:
+            payload = signing.loads(stage_token, salt='owner-password-change-salt', max_age=300)
+        except signing.SignatureExpired:
+            return Response(
+                {"success": False, "message": "Password change session expired. Please start again."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except signing.BadSignature:
+            return Response(
+                {"success": False, "message": "Invalid password change authorization token."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('purpose') != 'OWNER_PASSWORD_CHANGE' or payload.get('stage') != 'FULL_MFA_VERIFIED':
+            return Response(
+                {"success": False, "message": "Incomplete verification. Both Gmail OTP and Microsoft Authenticator are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if payload.get('user_id') != user.id or payload.get('email', '').lower() != user.email.lower():
+            return Response(
+                {"success": False, "message": "Password change challenge was issued to a different account."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Reject if new password matches current password
+        if user.check_password(new_password):
+            return Response(
+                {"new_password": ["New password cannot be the same as your current password."]},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update password using Django's set_password()
+        user.set_password(new_password)
         user.save()
+
+        # Invalidate all existing tokens and sessions
+        try:
+            from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+            tokens = OutstandingToken.objects.filter(user=user)
+            for tok in tokens:
+                BlacklistedToken.objects.get_or_create(token=tok)
+        except Exception:
+            pass
+
+        AuditService.log(
+            action=AuditLog.Action.OWNER_PASSWORD_CHANGE_SUCCESS,
+            actor=user,
+            actor_email=user.email,
+            target_model='User',
+            target_id=str(user.id),
+            metadata={"method": "MFA_GMAIL_AND_TOTP"},
+            request=request
+        )
 
         AuditService.log(
             action=AuditLog.Action.PASSWORD_CHANGE,
@@ -834,11 +1208,118 @@ class PlatformOwnerChangePasswordView(APIView):
             actor_email=user.email,
             target_model='User',
             target_id=str(user.id),
-            metadata={"reason": "PLATFORM_OWNER_VOLUNTARY_PASSWORD_CHANGE"},
+            metadata={"role": "PLATFORM_OWNER", "mfa_verified": True},
             request=request
         )
 
+        return Response(
+            {
+                "success": True,
+                "message": "Platform Owner password has been successfully updated. All existing sessions have been revoked. Please sign in again with your new password."
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class PlatformOwnerTOTPStatusView(APIView):
+    """
+    GET /api/platform-owner/security/totp/status/
+    Returns current Microsoft Authenticator configuration status for Platform Owner.
+    Never exposes secrets or recovery keys.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def get(self, request):
+        user = request.user
+        totp_config = getattr(user, 'owner_totp', None)
+        enabled = bool(totp_config and totp_config.enabled and totp_config.verified)
+        verified_at = totp_config.verified_at if totp_config and totp_config.verified else None
         return Response({
             "success": True,
-            "message": "Platform Owner password has been updated securely."
+            "email": user.email,
+            "enabled": enabled,
+            "verified": bool(totp_config and totp_config.verified),
+            "verified_at": verified_at.isoformat() if verified_at else None,
+            "issuer": "CampusCart"
         }, status=status.HTTP_200_OK)
+
+
+class PlatformOwnerTOTPSetupView(APIView):
+    """
+    POST /api/platform-owner/security/totp/setup/
+    Initiates Microsoft Authenticator enrollment.
+    Returns QR code data URI and manual setup key.
+    Only accessible by authenticated Platform Owner.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        from users.services.totp_service import OwnerTOTPService
+        user = request.user
+        enrollment_data = OwnerTOTPService.initiate_enrollment(user, request=request)
+        return Response({
+            "success": True,
+            "provisioning_uri": enrollment_data["provisioning_uri"],
+            "manual_entry_key": enrollment_data["manual_entry_key"],
+            "qr_code_data_uri": enrollment_data["qr_code_data_uri"],
+            "issuer": enrollment_data["issuer"],
+            "account": enrollment_data["account"],
+            "message": "Scan the QR code with Microsoft Authenticator, then enter the 6-digit code to confirm."
+        }, status=status.HTTP_200_OK)
+
+
+class PlatformOwnerTOTPConfirmView(APIView):
+    """
+    POST /api/platform-owner/security/totp/confirm/
+    Confirms TOTP enrollment with first 6-digit code from Microsoft Authenticator.
+    Activates TOTP on success.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        from users.services.totp_service import OwnerTOTPService
+        from users.auth_serializers import OwnerTOTPConfirmSerializer
+        serializer = OwnerTOTPConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        code = serializer.validated_data['code']
+
+        success, message = OwnerTOTPService.confirm_enrollment(request.user, code, request=request)
+        if not success:
+            return Response({"success": False, "message": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "success": True,
+            "message": message,
+            "enabled": True,
+            "verified": True
+        }, status=status.HTTP_200_OK)
+
+
+class PlatformOwnerTOTPResetView(APIView):
+    """
+    POST /api/platform-owner/security/totp/reset/
+    Securely resets Microsoft Authenticator configuration.
+    Requires account password + current authenticator code.
+    Admin CANNOT disable Platform Owner TOTP.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsPlatformOwner]
+
+    def post(self, request):
+        from users.services.totp_service import OwnerTOTPService
+        from users.auth_serializers import OwnerTOTPResetSerializer
+        serializer = OwnerTOTPResetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        password = serializer.validated_data['password']
+        code = serializer.validated_data['code']
+
+        success, message = OwnerTOTPService.reset_totp(request.user, password, code, request=request)
+        if not success:
+            return Response({"success": False, "message": message}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "success": True,
+            "message": message,
+            "enabled": False,
+            "verified": False
+        }, status=status.HTTP_200_OK)
+

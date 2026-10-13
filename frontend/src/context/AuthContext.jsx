@@ -28,11 +28,19 @@ export const AuthProvider = ({ children }) => {
       } catch (error) {
         console.warn('Auth token validation failed:', error?.message || error);
         if (isMounted) {
-          setUser(null);
-          setAccessToken(null);
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
-          localStorage.removeItem('user');
+          const status = error?.response?.status;
+          if (status === 401 || status === 403) {
+            setUser(null);
+            setAccessToken(null);
+            localStorage.removeItem('access_token');
+            localStorage.removeItem('refresh_token');
+            localStorage.removeItem('user');
+          } else {
+            // Server offline or network error: retain stored credentials to preserve session persistence
+            const stored = authService.getStoredUser();
+            setUser(stored);
+            setAccessToken(token);
+          }
         }
       } finally {
         if (isMounted) setLoading(false);
@@ -58,6 +66,9 @@ export const AuthProvider = ({ children }) => {
     setLoading(true);
     try {
       const result = await authService.login(email, password);
+      if (result.requires_2fa) {
+        return result;
+      }
       setUser(result.user);
       setAccessToken(result.accessToken);
       return result;
@@ -66,14 +77,43 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const verifyOwner2FA = useCallback(async (email, otp, preAuthToken) => {
+    setLoading(true);
+    try {
+      const result = await authService.verifyOwner2FA(email, otp, preAuthToken);
+      if (result.requires_totp) {
+        return result;
+      }
+      setUser(result.user);
+      setAccessToken(result.accessToken);
+      return result;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const verifyOwnerTOTP = useCallback(async (preAuthToken, code) => {
+    setLoading(true);
+    try {
+      const result = await authService.verifyOwnerTOTP(preAuthToken, code);
+      setUser(result.user);
+      setAccessToken(result.accessToken);
+      return result;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const resendOwner2FA = useCallback(async (email, preAuthToken) => {
+    return await authService.resendOwner2FA(email, preAuthToken);
+  }, []);
+
   const register = useCallback(async (userData) => {
     setLoading(true);
     try {
       const result = await authService.register(userData);
-      if (result.user?.email_verified) {
-        setUser(result.user);
-        setAccessToken(result.accessToken);
-      }
+      setUser(result.user);
+      setAccessToken(result.accessToken);
       return result;
     } finally {
       setLoading(false);
@@ -100,14 +140,32 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const switchRole = useCallback(async (targetRole) => {
+    setLoading(true);
+    try {
+      const result = await authService.switchRole(targetRole);
+      setUser(result.user);
+      setAccessToken(result.accessToken);
+      return result;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const value = {
     user,
     accessToken,
+    activeRole: user?.active_role || user?.role,
+    roles: user?.roles || (user?.role ? [user.role] : []),
     isAuthenticated: Boolean(accessToken && user),
     loading,
     login,
+    verifyOwner2FA,
+    verifyOwnerTOTP,
+    resendOwner2FA,
     register,
     logout,
+    switchRole,
     setUser,
     markEmailVerified,
   };

@@ -408,8 +408,11 @@ const DeliveryRouteMap = ({
 
       {/* Map Canvas */}
       <div
+        className="campus-map-wrapper"
         style={{
           position: 'relative',
+          isolation: 'isolate',
+          zIndex: 1,
           width: '100%',
           height,
           minHeight: '280px',
@@ -443,7 +446,7 @@ const DeliveryRouteMap = ({
               fontSize: '11px',
               fontWeight: 600,
               color: '#475569',
-              zIndex: 1000,
+              zIndex: 10,
               pointerEvents: 'none',
               boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
             }}

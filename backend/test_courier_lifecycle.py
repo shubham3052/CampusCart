@@ -8,6 +8,8 @@ import uuid
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
+from django.conf import settings
+from django.core import mail
 from rest_framework.test import APIClient
 from django.contrib.auth import get_user_model
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -28,6 +30,10 @@ def run_tests():
     print("=" * 80)
     print("COURIER REGISTRATION & APPROVAL LIFECYCLE VERIFICATION SUITE")
     print("=" * 80)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     # 1. Platform Owner and Admin setup
     admin_user = User.objects.filter(role=User.Role.ADMIN, is_active=True).first()

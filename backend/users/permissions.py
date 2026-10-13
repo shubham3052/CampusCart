@@ -31,7 +31,7 @@ class IsPlatformOwner(permissions.BasePermission):
         return bool(
             request.user
             and request.user.is_authenticated
-            and getattr(request.user, 'role', None) == 'PLATFORM_OWNER'
+            and (getattr(request.user, 'active_role', getattr(request.user, 'role', None)) == 'PLATFORM_OWNER' or request.user.is_platform_owner)
         )
 
 

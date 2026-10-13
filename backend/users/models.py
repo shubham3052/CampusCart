@@ -1,3 +1,8 @@
+import base64
+import hashlib
+from cryptography.fernet import Fernet
+from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
@@ -114,35 +119,113 @@ class User(AbstractUser):
             self.last_name = parts[1] if len(parts) > 1 else ''
 
     @property
+    def active_role(self):
+        """Returns the current active role for the user's session or default role."""
+        attr = getattr(self, '_active_role', None)
+        if attr:
+            return attr
+        return self.role
+
+    @active_role.setter
+    def active_role(self, value):
+        self._active_role = value
+        self.role = value
+
+    @property
+    def roles(self):
+        """Returns all authorized active role strings for this user."""
+        try:
+            active_roles = list(self.role_memberships.filter(is_active=True).values_list('role', flat=True))
+            if active_roles:
+                return active_roles
+        except Exception:
+            pass
+        return [self.role] if self.role else [self.Role.STUDENT]
+
+    def has_role(self, role):
+        """Checks if user possesses the specified role among active assignments."""
+        return role in self.roles
+
+    @property
     def is_student(self):
-        return self.role == self.Role.STUDENT
+        return self.active_role == self.Role.STUDENT
 
     @property
     def is_shop_owner(self):
-        return self.role == self.Role.SHOP_OWNER
+        return self.active_role == self.Role.SHOP_OWNER
 
     @property
     def is_delivery_agent(self):
-        return self.role == self.Role.DELIVERY_AGENT
+        return self.active_role == self.Role.DELIVERY_AGENT
 
     @property
     def is_approved_courier(self):
-        return self.role == self.Role.DELIVERY_AGENT and self.approval_status == self.ApprovalStatus.APPROVED
+        return self.active_role == self.Role.DELIVERY_AGENT and self.approval_status == self.ApprovalStatus.APPROVED
 
     @property
     def is_pending_courier(self):
-        return self.role == self.Role.DELIVERY_AGENT and self.approval_status == self.ApprovalStatus.PENDING
+        return self.active_role == self.Role.DELIVERY_AGENT and self.approval_status == self.ApprovalStatus.PENDING
 
     @property
     def is_admin(self):
-        return self.role in [self.Role.ADMIN, self.Role.PLATFORM_OWNER] or self.is_superuser or self.is_staff
+        return self.active_role in [self.Role.ADMIN, self.Role.PLATFORM_OWNER] or self.is_superuser
 
     @property
     def is_platform_owner(self):
-        return self.role == self.Role.PLATFORM_OWNER
+        return self.active_role == self.Role.PLATFORM_OWNER
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.role and self.pk:
+            try:
+                UserRole.objects.get_or_create(user=self, role=self.role, defaults={'is_active': True})
+            except Exception:
+                pass
 
     def __str__(self):
         return f"{self.name} <{self.email}> [{self.get_role_display()}]"
+
+
+class UserRole(models.Model):
+    """
+    Dedicated relational model for User Role Memberships.
+    Enables one user account/identity to possess multiple authorized roles
+    (e.g., STUDENT, SHOP_OWNER, DELIVERY_AGENT, ADMIN, PLATFORM_OWNER).
+    """
+    user = models.ForeignKey(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='role_memberships',
+        db_index=True
+    )
+    role = models.CharField(
+        max_length=20,
+        choices=User.Role.choices,
+        db_index=True,
+        help_text="Role assigned to this user"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        db_index=True,
+        help_text="Designates whether this role membership is active."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_roles'
+        verbose_name = 'User Role Membership'
+        verbose_name_plural = 'User Role Memberships'
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'role'], name='unique_user_role')
+        ]
+        indexes = [
+            models.Index(fields=['user', 'role']),
+            models.Index(fields=['user', 'is_active']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} -> {self.role} (Active: {self.is_active})"
 
 
 class EmailVerificationOTP(models.Model):
@@ -156,6 +239,9 @@ class EmailVerificationOTP(models.Model):
         PASSWORD_RESET = 'PASSWORD_RESET', 'Password Reset'
         ACCOUNT_DELETION = 'ACCOUNT_DELETION', 'Account Deletion'
         ADMIN_INVITATION = 'ADMIN_INVITATION', 'Admin Invitation Verification'
+        OWNER_2FA = 'OWNER_2FA', 'Platform Owner 2FA'
+        OWNER_PASSWORD_CHANGE = 'OWNER_PASSWORD_CHANGE', 'Platform Owner Password Change'
+        OWNER_PASSWORD_SETUP = 'OWNER_PASSWORD_SETUP', 'Platform Owner Password Setup'
 
     user = models.ForeignKey(
         'users.User',
@@ -266,6 +352,41 @@ class AuditLog(models.Model):
         ACCOUNT_DELETED = 'ACCOUNT_DELETED', 'Account Deleted'
         ADMIN_INVITED = 'ADMIN_INVITED', 'Administrator Invited'
         ADMIN_ACTIVATED = 'ADMIN_ACTIVATED', 'Administrator Account Activated'
+        OWNER_LOGIN_PASSWORD_SUCCESS = 'OWNER_LOGIN_PASSWORD_SUCCESS', 'Owner Login Password Success'
+        OWNER_OTP_SENT = 'OWNER_OTP_SENT', 'Owner OTP Sent'
+        OWNER_OTP_FAILED = 'OWNER_OTP_FAILED', 'Owner OTP Failed'
+        OWNER_OTP_SUCCESS = 'OWNER_OTP_SUCCESS', 'Owner OTP Success'
+        OWNER_LOGIN_SUCCESS = 'OWNER_LOGIN_SUCCESS', 'Owner Login Success'
+        OWNER_LOGIN_FAILURE = 'OWNER_LOGIN_FAILURE', 'Owner Login Failure'
+        OWNER_REJECTED_ROLE_SWITCH = 'OWNER_REJECTED_ROLE_SWITCH', 'Owner Rejected Role Switch'
+        OWNER_REJECTED_MODIFICATION = 'OWNER_REJECTED_MODIFICATION', 'Owner Rejected Modification'
+        OWNER_REJECTED_DELETION = 'OWNER_REJECTED_DELETION', 'Owner Rejected Deletion'
+        OWNER_TOTP_ENROLLMENT_STARTED = 'OWNER_TOTP_ENROLLMENT_STARTED', 'Owner TOTP Enrollment Started'
+        OWNER_TOTP_ENROLLMENT_FAILED = 'OWNER_TOTP_ENROLLMENT_FAILED', 'Owner TOTP Enrollment Failed'
+        OWNER_TOTP_ENABLED = 'OWNER_TOTP_ENABLED', 'Owner TOTP Enabled'
+        OWNER_TOTP_FAILED = 'OWNER_TOTP_FAILED', 'Owner TOTP Failed'
+        OWNER_TOTP_SUCCESS = 'OWNER_TOTP_SUCCESS', 'Owner TOTP Success'
+        OWNER_TOTP_REPLAY_REJECTED = 'OWNER_TOTP_REPLAY_REJECTED', 'Owner TOTP Replay Rejected'
+        OWNER_TOTP_RESET_STARTED = 'OWNER_TOTP_RESET_STARTED', 'Owner TOTP Reset Started'
+        OWNER_TOTP_RESET_SUCCESS = 'OWNER_TOTP_RESET_SUCCESS', 'Owner TOTP Reset Success'
+        OWNER_TOTP_RESET_FAILED = 'OWNER_TOTP_RESET_FAILED', 'Owner TOTP Reset Failed'
+        OWNER_PASSWORD_CHANGE_STARTED = 'OWNER_PASSWORD_CHANGE_STARTED', 'Owner Password Change Started'
+        OWNER_PASSWORD_CHANGE_PASSWORD_VERIFIED = 'OWNER_PASSWORD_CHANGE_PASSWORD_VERIFIED', 'Owner Password Change Password Verified'
+        OWNER_PASSWORD_CHANGE_OTP_SENT = 'OWNER_PASSWORD_CHANGE_OTP_SENT', 'Owner Password Change OTP Sent'
+        OWNER_PASSWORD_CHANGE_OTP_FAILED = 'OWNER_PASSWORD_CHANGE_OTP_FAILED', 'Owner Password Change OTP Failed'
+        OWNER_PASSWORD_CHANGE_OTP_SUCCESS = 'OWNER_PASSWORD_CHANGE_OTP_SUCCESS', 'Owner Password Change OTP Success'
+        OWNER_PASSWORD_CHANGE_TOTP_FAILED = 'OWNER_PASSWORD_CHANGE_TOTP_FAILED', 'Owner Password Change TOTP Failed'
+        OWNER_PASSWORD_CHANGE_TOTP_SUCCESS = 'OWNER_PASSWORD_CHANGE_TOTP_SUCCESS', 'Owner Password Change TOTP Success'
+        OWNER_PASSWORD_CHANGE_SUCCESS = 'OWNER_PASSWORD_CHANGE_SUCCESS', 'Owner Password Change Success'
+        OWNER_PASSWORD_CHANGE_FAILURE = 'OWNER_PASSWORD_CHANGE_FAILURE', 'Owner Password Change Failure'
+        OWNER_INITIAL_PASSWORD_SETUP_STARTED = 'OWNER_INITIAL_PASSWORD_SETUP_STARTED', 'Owner Initial Password Setup Started'
+        OWNER_INITIAL_PASSWORD_GMAIL_OTP_SENT = 'OWNER_INITIAL_PASSWORD_GMAIL_OTP_SENT', 'Owner Initial Password Gmail OTP Sent'
+        OWNER_INITIAL_PASSWORD_GMAIL_OTP_FAILED = 'OWNER_INITIAL_PASSWORD_GMAIL_OTP_FAILED', 'Owner Initial Password Gmail OTP Failed'
+        OWNER_INITIAL_PASSWORD_GMAIL_OTP_SUCCESS = 'OWNER_INITIAL_PASSWORD_GMAIL_OTP_SUCCESS', 'Owner Initial Password Gmail OTP Success'
+        OWNER_INITIAL_PASSWORD_TOTP_FAILED = 'OWNER_INITIAL_PASSWORD_TOTP_FAILED', 'Owner Initial Password TOTP Failed'
+        OWNER_INITIAL_PASSWORD_TOTP_SUCCESS = 'OWNER_INITIAL_PASSWORD_TOTP_SUCCESS', 'Owner Initial Password TOTP Success'
+        OWNER_INITIAL_PASSWORD_SETUP_SUCCESS = 'OWNER_INITIAL_PASSWORD_SETUP_SUCCESS', 'Owner Initial Password Setup Success'
+        OWNER_INITIAL_PASSWORD_SETUP_FAILURE = 'OWNER_INITIAL_PASSWORD_SETUP_FAILURE', 'Owner Initial Password Setup Failure'
 
         # Orders & Payments
         ORDER_CREATED = 'ORDER_CREATED', 'Order Created'
@@ -327,5 +448,80 @@ class AuditLog(models.Model):
     def __str__(self):
         actor_str = self.actor_email or (self.actor.username if self.actor else 'SYSTEM')
         return f"[{self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] {self.action} by {actor_str}"
+
+
+class PlatformOwnerTOTP(models.Model):
+    """
+    Step 18: Dedicated Platform Owner Microsoft Authenticator (TOTP) Configuration.
+    Stores securely encrypted base32 TOTP secret, enrollment state, and time-step replay counters.
+    Enforces that only PLATFORM_OWNER accounts can possess TOTP configuration.
+    """
+    user = models.OneToOneField(
+        'users.User',
+        on_delete=models.CASCADE,
+        related_name='owner_totp',
+        db_index=True
+    )
+    encrypted_secret = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Fernet encrypted base32 TOTP secret"
+    )
+    enabled = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Designates whether TOTP 2FA is active"
+    )
+    verified = models.BooleanField(
+        default=False,
+        help_text="Designates whether initial enrollment code was confirmed"
+    )
+    verified_at = models.DateTimeField(null=True, blank=True)
+    last_used_time_step = models.BigIntegerField(
+        default=0,
+        help_text="Last verified 30-second TOTP time step for replay protection"
+    )
+    failed_attempts = models.PositiveIntegerField(
+        default=0,
+        help_text="Consecutive failed attempts on current challenge (locked after 5)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'platform_owner_totp'
+        verbose_name = 'Platform Owner TOTP Configuration'
+        verbose_name_plural = 'Platform Owner TOTP Configurations'
+
+    @classmethod
+    def _get_cipher(cls):
+        key = base64.urlsafe_b64encode(hashlib.sha256(settings.SECRET_KEY.encode()).digest())
+        return Fernet(key)
+
+    def set_secret(self, raw_secret: str):
+        """Encrypts raw base32 secret before database persistence."""
+        cipher = self._get_cipher()
+        self.encrypted_secret = cipher.encrypt(raw_secret.strip().encode()).decode()
+
+    def get_secret(self) -> str:
+        """Decrypts and returns the raw base32 secret in-memory."""
+        if not self.encrypted_secret:
+            return ""
+        cipher = self._get_cipher()
+        return cipher.decrypt(self.encrypted_secret.encode()).decode()
+
+    def clean(self):
+        super().clean()
+        if self.user and not (getattr(self.user, 'is_platform_owner', False) or self.user.has_role(User.Role.PLATFORM_OWNER) or self.user.email.lower() == 'garibhokya@gmail.com'):
+            raise ValidationError("Platform Owner TOTP configuration is strictly restricted to PLATFORM_OWNER accounts.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        status_str = "Enabled" if (self.enabled and self.verified) else "Pending"
+        return f"Platform Owner TOTP for {self.user.email} [{status_str}]"
 
 

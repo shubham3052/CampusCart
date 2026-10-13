@@ -44,10 +44,17 @@ def clear_auth():
     """Helper to clear credentials."""
     client.credentials()
 
+from django.conf import settings
+from django.core import mail
+
 def run_tests():
     print("=" * 70)
     print("STARTING STEP 7 AUTHENTICATION & RBAC AUTOMATED TEST SUITE")
     print("=" * 70)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     # -------------------------------------------------------------
     # 1. Unauthenticated Endpoint Tests

@@ -437,3 +437,82 @@ class EmailVerificationTests(APITestCase):
         self.assertFalse(owner.is_admin)
         self.assertFalse(owner.is_staff)
         self.assertFalse(owner.is_superuser)
+
+    # -------------------------------------------------------------
+    # 7. STEP 13: TEST EMAIL ISOLATION & ZERO EXTERNAL DISPATCH ASSURANCE
+    # -------------------------------------------------------------
+    def test_mock_test_domains_strictly_isolated_in_locmem(self):
+        """
+        Ensures test addresses (e.g. brand_new_admin_test@campus.edu, test_multiple_student@campus.edu,
+        new_admin_valid_flow@campus.edu, audit_multirole@testcorp.edu) are strictly captured in
+        locmem outbox with zero external network transmission.
+        """
+        test_emails = [
+            "brand_new_admin_test@campus.edu",
+            "test_multiple_student@campus.edu",
+            "new_admin_valid_flow@campus.edu",
+            "audit_multirole@testcorp.edu"
+        ]
+        mail.outbox = []
+        for test_email in test_emails:
+            sent, msg, record = EmailService.create_and_send_otp(
+                email=test_email,
+                purpose=EmailVerificationOTP.Purpose.EMAIL_VERIFICATION
+            )
+            self.assertTrue(sent)
+            self.assertIsNotNone(record)
+
+        self.assertEqual(len(mail.outbox), 4)
+        outbox_recipients = [m.to[0] for m in mail.outbox]
+        for test_email in test_emails:
+            self.assertIn(test_email, outbox_recipients)
+
+    def test_admin_invitation_otp_dynamic_recipient_isolation(self):
+        """
+        Verifies Admin invitation OTP is dispatched strictly to the invited user's email in locmem.
+        """
+        admin = User.objects.create_user(
+            username="inviter_admin",
+            email="inviter_admin@campus.edu",
+            password="AdminPassword123!",
+            role=User.Role.ADMIN,
+            is_active=True,
+            email_verified=True,
+            is_staff=True
+        )
+        self.client.force_authenticate(user=admin)
+        mail.outbox = []
+
+        target_invitee = "invited_admin_step13@campus.edu"
+        res = self.client.post('/api/admin/management/invite/', {
+            "email": target_invitee,
+            "name": "Step13 Admin",
+            "department": "Engineering"
+        }, format='json')
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [target_invitee])
+        self.assertIn("Administrator Invitation", mail.outbox[0].subject)
+
+    def test_account_deletion_otp_dynamic_recipient_isolation(self):
+        """
+        Verifies account deletion OTP is dispatched strictly to authenticated user's email in locmem.
+        """
+        del_user = User.objects.create_user(
+            username="delete_me_step13",
+            email="delete_me_step13@campus.edu",
+            password="SecureDeletePass123!",
+            role=User.Role.STUDENT,
+            is_active=True,
+            email_verified=True
+        )
+        self.client.force_authenticate(user=del_user)
+        mail.outbox = []
+
+        res = self.client.post('/api/account/delete/request/', format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [del_user.email])
+        self.assertIn("Account Deletion", mail.outbox[0].subject)
+

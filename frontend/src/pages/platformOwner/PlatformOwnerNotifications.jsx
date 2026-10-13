@@ -33,6 +33,7 @@ export default function PlatformOwnerNotifications() {
   const fetchFeed = async () => {
     try {
       setLoading(true);
+      setErrorMessage(null);
       const [feedRes, unreadRes] = await Promise.all([
         platformOwnerService.getNotifications(),
         platformOwnerService.getUnreadNotificationCount()
@@ -41,6 +42,10 @@ export default function PlatformOwnerNotifications() {
       setUnreadCount(unreadRes.data?.unread_count || 0);
     } catch (err) {
       console.error('Failed to load notifications:', err);
+      const msg = err.message?.includes('Network Error') || !err.response
+        ? 'Unable to load notifications: CampusCart backend server is unreachable. Please ensure Django is running on port 8000.'
+        : (err.response?.data?.message || err.response?.data?.detail || 'Unable to load notifications. Please try again.');
+      setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
@@ -141,6 +146,22 @@ export default function PlatformOwnerNotifications() {
         </div>
       </div>
 
+      {errorMessage && (
+        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 flex-shrink-0 text-rose-400" />
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            type="button"
+            onClick={fetchFeed}
+            className="px-3 py-1 bg-rose-950/60 hover:bg-rose-900/60 border border-rose-700/60 text-rose-200 text-xs rounded-lg transition whitespace-nowrap"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {successMessage && (
         <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm flex items-center gap-3">
           <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
@@ -184,6 +205,19 @@ export default function PlatformOwnerNotifications() {
               </div>
             </div>
           ))
+        ) : errorMessage ? (
+          <div className="p-12 text-center text-slate-400 text-sm">
+            <AlertTriangle className="w-8 h-8 text-amber-500 mx-auto mb-2 opacity-80" />
+            <div className="font-semibold text-white mb-1">Unable to load notifications</div>
+            <p className="text-xs text-slate-400 mb-4 max-w-sm mx-auto">{errorMessage}</p>
+            <button
+              type="button"
+              onClick={fetchFeed}
+              className="inline-flex items-center gap-2 px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs rounded-xl border border-slate-700 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Retry Connection
+            </button>
+          </div>
         ) : (
           <div className="p-12 text-center text-slate-500 text-sm">
             <Bell className="w-8 h-8 text-slate-600 mx-auto mb-2 opacity-50" />

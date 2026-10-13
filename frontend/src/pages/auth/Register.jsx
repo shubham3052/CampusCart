@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mail, Lock, User, Phone, Sparkles, UserPlus } from 'lucide-react';
+import { Mail, Lock, User, Phone, UserPlus, GraduationCap, Store, Bike } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import Input from '../../components/common/Input';
-import Select from '../../components/common/Select';
 import Button from '../../components/common/Button';
 import ErrorMessage from '../../components/common/ErrorMessage';
 import EmailOtpModal from '../../components/auth/EmailOtpModal';
+
+const ALLOWED_PUBLIC_ROLES = ['STUDENT', 'SHOP_OWNER', 'DELIVERY_AGENT'];
 
 const Register = () => {
   const [formData, setFormData] = useState({
@@ -17,13 +18,14 @@ const Register = () => {
     phone_number: '',
     password: '',
     confirm_password: '',
-    role: 'STUDENT',
+    role: 'STUDENT', // Default to Student, fully selectable between Student, Shop Owner, Courier
   });
 
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [registeredUser, setRegisteredUser] = useState(null);
+  const [otpWarning, setOtpWarning] = useState('');
 
   const { register, markEmailVerified } = useAuth();
   const navigate = useNavigate();
@@ -35,8 +37,15 @@ const Register = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setFormError('');
+    setOtpWarning('');
 
-    // 1. Email format validation
+    // 1. Role selection validation
+    if (!formData.role || !ALLOWED_PUBLIC_ROLES.includes(formData.role)) {
+      setFormError('Please choose an account type (Student, Shop Owner, or Courier).');
+      return;
+    }
+
+    // 2. Email format validation
     const emailClean = formData.email.trim().toLowerCase();
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailClean || !emailRegex.test(emailClean)) {
@@ -44,13 +53,13 @@ const Register = () => {
       return;
     }
 
-    // 2. Name validation
+    // 3. Name validation
     if (!formData.first_name.trim()) {
       setFormError('First name is required.');
       return;
     }
 
-    // 3. Password matching and criteria
+    // 4. Password matching and criteria
     if (formData.password !== formData.confirm_password) {
       setFormError('Passwords do not match.');
       return;
@@ -81,6 +90,11 @@ const Register = () => {
 
       const result = await register(payload);
       setRegisteredUser(result.user || payload);
+      if (result.email_sent === false) {
+        setOtpWarning('Account registered, but verification email could not be delivered immediately. Please click "Resend Code" below to dispatch a new code.');
+      } else {
+        setOtpWarning('');
+      }
       setShowOtpModal(true);
     } catch (err) {
       console.error('Registration error:', err);
@@ -114,6 +128,30 @@ const Register = () => {
     }
   };
 
+  const roleOptions = [
+    {
+      id: 'role-student',
+      value: 'STUDENT',
+      label: 'Student',
+      description: 'Stationery & Printing',
+      icon: GraduationCap,
+    },
+    {
+      id: 'role-shop-owner',
+      value: 'SHOP_OWNER',
+      label: 'Shop Owner',
+      description: 'Merchant Partner',
+      icon: Store,
+    },
+    {
+      id: 'role-courier',
+      value: 'DELIVERY_AGENT',
+      label: 'Courier',
+      description: 'Campus Delivery',
+      icon: Bike,
+    },
+  ];
+
   return (
     <div
       style={{
@@ -135,7 +173,7 @@ const Register = () => {
           borderRadius: 'var(--radius-xl)',
         }}
       >
-        <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
           <img
             src="/assets/campuscart-logo.png"
             alt="CampusCart Logo"
@@ -149,7 +187,7 @@ const Register = () => {
             }}
           />
           <h1 style={{ fontSize: '1.55rem', fontWeight: 800, color: 'var(--text-primary)', letterSpacing: '-0.02em' }}>
-            Create Account
+            Create your CampusCart account
           </h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
             Join the CampusCart Student Stationery & Printing Platform
@@ -163,9 +201,106 @@ const Register = () => {
           />
         )}
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} noValidate>
+          {/* Public Role Selection */}
+          <div style={{ marginBottom: '1.35rem' }}>
+            <label
+              className="form-label"
+              style={{
+                display: 'block',
+                fontSize: '0.85rem',
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+                marginBottom: '0.5rem',
+              }}
+            >
+              Choose account type: <span style={{ color: 'var(--danger-500)' }}>*</span>
+            </label>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '0.6rem',
+              }}
+            >
+              {roleOptions.map((opt) => {
+                const isSelected = formData.role === opt.value;
+                const Icon = opt.icon;
+                return (
+                  <button
+                    key={opt.value}
+                    id={opt.id}
+                    type="button"
+                    onClick={() => handleChange('role', opt.value)}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '0.85rem 0.5rem',
+                      borderRadius: 'var(--radius-lg, 10px)',
+                      border: isSelected
+                        ? '2px solid var(--primary-600, #4f46e5)'
+                        : '1px solid var(--border-medium, #cbd5e1)',
+                      backgroundColor: isSelected
+                        ? 'var(--primary-50, #eef2ff)'
+                        : 'var(--bg-surface, #ffffff)',
+                      color: isSelected
+                        ? 'var(--primary-700, #4338ca)'
+                        : 'var(--text-primary, #1e293b)',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                      textAlign: 'center',
+                      boxShadow: isSelected ? '0 1px 3px rgba(79, 70, 229, 0.15)' : 'none',
+                    }}
+                  >
+                    <Icon
+                      size={22}
+                      style={{
+                        marginBottom: '0.35rem',
+                        color: isSelected ? 'var(--primary-600, #4f46e5)' : 'var(--text-muted, #64748b)',
+                      }}
+                    />
+                    <span style={{ fontSize: '0.85rem', fontWeight: 700, lineHeight: 1.2 }}>
+                      {opt.label}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: '0.68rem',
+                        color: isSelected ? 'var(--primary-600, #4f46e5)' : 'var(--text-muted, #64748b)',
+                        marginTop: '0.2rem',
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      {opt.description}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {formData.role === 'DELIVERY_AGENT' && (
+            <div
+              style={{
+                backgroundColor: 'rgba(99, 102, 241, 0.08)',
+                border: '1px solid rgba(99, 102, 241, 0.25)',
+                borderRadius: 'var(--radius-md)',
+                padding: '0.75rem 1rem',
+                marginBottom: '1.25rem',
+                fontSize: '0.82rem',
+                color: 'var(--primary-700)',
+                lineHeight: 1.4,
+              }}
+            >
+              <strong>Campus Courier Notice:</strong> Delivery partner accounts require administrator review and approval after email verification before receiving live delivery orders.
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
+              id="register-first-name"
               label="First Name"
               placeholder="e.g. Rahul"
               value={formData.first_name}
@@ -173,6 +308,7 @@ const Register = () => {
               required
             />
             <Input
+              id="register-last-name"
               label="Last Name"
               placeholder="e.g. Sharma"
               value={formData.last_name}
@@ -182,6 +318,7 @@ const Register = () => {
           </div>
 
           <Input
+            id="register-username"
             label="Username"
             placeholder="e.g. rahul_sharma"
             value={formData.username}
@@ -191,6 +328,7 @@ const Register = () => {
           />
 
           <Input
+            id="register-email"
             label="Email Address"
             type="email"
             placeholder="student@college.edu"
@@ -201,6 +339,7 @@ const Register = () => {
           />
 
           <Input
+            id="register-phone"
             label="Phone Number"
             type="tel"
             placeholder="+91 9876543210"
@@ -210,36 +349,9 @@ const Register = () => {
             required
           />
 
-          <Select
-            label="I am registering as"
-            value={formData.role}
-            onChange={(e) => handleChange('role', e.target.value)}
-            options={[
-              { value: 'STUDENT', label: 'Student / Customer (Stationery & Xerox Delivery)' },
-              { value: 'SHOP_OWNER', label: 'Shop Owner (Stationery & Printing Merchant)' },
-              { value: 'DELIVERY_AGENT', label: 'Courier / Delivery Partner (Campus Logistics)' },
-            ]}
-            placeholder=""
-            required
-          />
-
-          {formData.role === 'DELIVERY_AGENT' && (
-            <div style={{
-              backgroundColor: 'rgba(99, 102, 241, 0.08)',
-              border: '1px solid rgba(99, 102, 241, 0.25)',
-              borderRadius: 'var(--radius-md)',
-              padding: '0.75rem 1rem',
-              marginBottom: '1rem',
-              fontSize: '0.82rem',
-              color: 'var(--primary-700)',
-              lineHeight: 1.4
-            }}>
-              <strong>Campus Courier Notice:</strong> Delivery partner accounts require administrator review and approval before live delivery tasks and shift toggling can be activated.
-            </div>
-          )}
-
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Input
+              id="register-password"
               label="Password"
               type="password"
               placeholder="••••••••"
@@ -249,6 +361,7 @@ const Register = () => {
               required
             />
             <Input
+              id="register-confirm-password"
               label="Confirm Password"
               type="password"
               placeholder="••••••••"
@@ -259,8 +372,9 @@ const Register = () => {
             />
           </div>
 
-          <div style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+          <div style={{ marginTop: '1.25rem', marginBottom: '1.5rem' }}>
             <Button
+              id="register-submit-button"
               type="submit"
               variant="primary"
               size="lg"
@@ -278,6 +392,7 @@ const Register = () => {
             Already have an account?{' '}
             <Link
               to="/login"
+              id="register-signin-link"
               style={{ fontWeight: 600, color: 'var(--primary-600)' }}
             >
               Sign In
@@ -293,6 +408,7 @@ const Register = () => {
           email={registeredUser?.email || formData.email}
           purpose="EMAIL_VERIFICATION"
           canDismiss={false}
+          initialError={otpWarning}
           onSuccess={() => {
             markEmailVerified();
             const role = registeredUser?.role || formData.role;

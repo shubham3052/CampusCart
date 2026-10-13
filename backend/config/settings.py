@@ -227,7 +227,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Django REST Framework Settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'users.authentication.MultiRoleJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticatedOrReadOnly',
@@ -302,46 +302,82 @@ SIMPLE_JWT = {
 }
 
 # Cross-Origin Resource Sharing (CORS) Settings
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins when in development mode
+CORS_ALLOW_ALL_ORIGINS = False  # Strictly disabled: only explicitly allowed origins permitted
+CORS_ALLOW_CREDENTIALS = True
+
+# Explicit production domains (Step 8 hardening)
+PRODUCTION_ORIGINS = [
+    'https://campus-cart-steel.vercel.app',
+    'https://campuscart-backend-u8k0.onrender.com',
+]
+
+LOCAL_DEV_ORIGINS = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
+    'http://192.168.1.21:5174',
+    'http://192.168.1.23:5174',
+]
+
 env_cors_origins = os.environ.get('CORS_ALLOWED_ORIGINS', '')
 if env_cors_origins:
     CORS_ALLOWED_ORIGINS = [orig.strip() for orig in env_cors_origins.split(',') if orig.strip()]
+    for _prod_orig in PRODUCTION_ORIGINS:
+        if _prod_orig not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_prod_orig)
 else:
-    CORS_ALLOWED_ORIGINS = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://localhost:5174',
-        'http://127.0.0.1:5174',
-        'http://192.168.1.21:5174',
-        'http://192.168.1.23:5174',
-    ]
+    CORS_ALLOWED_ORIGINS = list(PRODUCTION_ORIGINS)
     if DEBUG:
-        for _host in ALLOWED_HOSTS:
-            if _host not in ['localhost', '127.0.0.1', 'testserver', '*'] and not _host.startswith('.'):
-                for _port in ['5173', '5174', '3000']:
-                    _origin = f'http://{_host}:{_port}'
-                    if _origin not in CORS_ALLOWED_ORIGINS:
-                        CORS_ALLOWED_ORIGINS.append(_origin)
+        CORS_ALLOWED_ORIGINS.extend(LOCAL_DEV_ORIGINS)
 
-CORS_ALLOW_CREDENTIALS = True
+if DEBUG:
+    for _host in ALLOWED_HOSTS:
+        if _host not in ['localhost', '127.0.0.1', 'testserver', '*'] and not _host.startswith('.'):
+            for _port in ['5173', '5174', '3000']:
+                _origin = f'http://{_host}:{_port}'
+                if _origin not in CORS_ALLOWED_ORIGINS:
+                    CORS_ALLOWED_ORIGINS.append(_origin)
 
-# Cross-Site Request Forgery (CSRF) Trusted Origins (Step 30)
+# CORS_EXTRA_ALLOWED_ORIGINS: optional comma-separated extra origins from environment
+_extra_cors = os.environ.get('CORS_EXTRA_ALLOWED_ORIGINS', '').strip()
+if _extra_cors:
+    for _extra_orig in _extra_cors.split(','):
+        _extra_orig = _extra_orig.strip()
+        if _extra_orig and _extra_orig not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_extra_orig)
+
+# Always include FRONTEND_BASE_URL in allowed CORS origins if it is a deployed URL
+_frontend_base = os.environ.get('FRONTEND_BASE_URL', '').strip()
+if _frontend_base and _frontend_base.startswith('https://') and _frontend_base not in CORS_ALLOWED_ORIGINS:
+    CORS_ALLOWED_ORIGINS.append(_frontend_base)
+
+# Broad regexes removed to eliminate arbitrary Vercel/Render tenant spoofing
+CORS_ALLOWED_ORIGIN_REGEXES = []
+
+# Cross-Site Request Forgery (CSRF) Trusted Origins (Step 8 hardening)
 env_csrf_origins = os.environ.get('CSRF_TRUSTED_ORIGINS', '')
 if env_csrf_origins:
     CSRF_TRUSTED_ORIGINS = [orig.strip() for orig in env_csrf_origins.split(',') if orig.strip()]
+    for _prod_orig in PRODUCTION_ORIGINS:
+        if _prod_orig not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(_prod_orig)
 else:
-    CSRF_TRUSTED_ORIGINS = [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://localhost:5174',
-        'http://127.0.0.1:5174',
-        'http://192.168.1.21:5174',
-        'http://192.168.1.23:5174',
-    ]
+    CSRF_TRUSTED_ORIGINS = list(PRODUCTION_ORIGINS)
+    if DEBUG:
+        CSRF_TRUSTED_ORIGINS.extend(LOCAL_DEV_ORIGINS)
+
+# Also add extra CORS origins and FRONTEND_BASE_URL to CSRF trusted origins
+if _extra_cors:
+    for _extra_orig in _extra_cors.split(','):
+        _extra_orig = _extra_orig.strip()
+        if _extra_orig and _extra_orig not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(_extra_orig)
+
+if _frontend_base and _frontend_base.startswith('https://') and _frontend_base not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(_frontend_base)
 
 if DEBUG:
     for _host in ALLOWED_HOSTS:
@@ -443,24 +479,33 @@ EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', 15))  # Network socket timeout in
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'noreply@campuscart.edu')
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 
-# Backend resolution: Explicit env > SMTP (if credentials provided) > Console (if DEBUG) > SMTP
+# Backend resolution: Test environment (locmem outbox ALWAYS) > Explicit env > SMTP (if credentials provided) > Console (if DEBUG) > SMTP
+_is_test_environment = 'test' in sys.argv or any('test' in str(arg).lower() for arg in sys.argv)
 _smtp_configured = bool(EMAIL_HOST_USER and EMAIL_HOST_PASSWORD)
-EMAIL_BACKEND = os.getenv(
-    'EMAIL_BACKEND',
-    'django.core.mail.backends.smtp.EmailBackend' if _smtp_configured else (
-        'django.core.mail.backends.console.EmailBackend' if DEBUG else 'django.core.mail.backends.smtp.EmailBackend'
+
+if _is_test_environment:
+    EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+else:
+    EMAIL_BACKEND = os.getenv(
+        'EMAIL_BACKEND',
+        'django.core.mail.backends.smtp.EmailBackend' if _smtp_configured else (
+            'django.core.mail.backends.console.EmailBackend' if DEBUG else 'django.core.mail.backends.smtp.EmailBackend'
+        )
     )
-)
 
 # ==============================================================================
-# HTTPS TRANSACTIONAL EMAIL DELIVERY (RESEND API OVER PORT 443)
+# HTTPS TRANSACTIONAL EMAIL DELIVERY (BREVO / RESEND API OVER PORT 443)
 # Communicates over HTTPS port 443 to bypass outbound SMTP blocks (25/465/587)
 # on cloud hosting platforms such as Render Free.
+# Priority: BREVO_API_KEY > RESEND_API_KEY > Django EMAIL_BACKEND fallback
 # ==============================================================================
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', os.getenv('EMAIL_PROVIDER_API_KEY', '')).strip().strip('\'"')
 BREVO_API_KEY = os.getenv('BREVO_API_KEY', '').strip().strip('\'"')
+BREVO_SENDER_EMAIL = os.getenv('BREVO_SENDER_EMAIL', '').strip().strip('\'"')
+BREVO_SENDER_NAME = os.getenv('BREVO_SENDER_NAME', '').strip().strip('\'"')
 EMAIL_FROM_ADDRESS = os.getenv('EMAIL_FROM_ADDRESS', '').strip().strip('\'"')
 EMAIL_FROM_NAME = os.getenv('EMAIL_FROM_NAME', 'CampusCart').strip().strip('\'"')
+DEFAULT_FROM_NAME = os.getenv('DEFAULT_FROM_NAME', EMAIL_FROM_NAME or 'CampusCart').strip().strip('\'"')
 
 # Email OTP Security Configuration
 EMAIL_OTP_EXPIRY_SECONDS = int(os.getenv('EMAIL_OTP_EXPIRY_SECONDS', 300))  # 5 minutes
@@ -483,6 +528,15 @@ if DEBUG:
     except Exception:
         pass
 
-FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', os.getenv('FRONTEND_URL', f'http://{_default_frontend_host}:5174'))
+_vercel_url = os.getenv('VERCEL_URL', '').strip()
+if _vercel_url and not _vercel_url.startswith('http'):
+    _vercel_url = f'https://{_vercel_url}'
+
+FRONTEND_BASE_URL = (
+    os.getenv('FRONTEND_BASE_URL', '').strip()
+    or os.getenv('FRONTEND_URL', '').strip()
+    or _vercel_url
+    or f'http://{_default_frontend_host}:5174'
+)
 
 

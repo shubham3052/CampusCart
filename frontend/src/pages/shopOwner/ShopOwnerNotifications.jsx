@@ -21,6 +21,7 @@ import Card from '../../components/common/Card';
 import Button from '../../components/common/Button';
 import Badge from '../../components/common/Badge';
 import { Spinner } from '../../components/common/Loader';
+import ErrorMessage from '../../components/common/ErrorMessage';
 import notificationService from '../../services/notificationService';
 
 export default function ShopOwnerNotifications() {
@@ -31,10 +32,12 @@ export default function ShopOwnerNotifications() {
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [successMsg, setSuccessMsg] = useState('');
+  const [error, setError] = useState(null);
 
   const fetchNotifications = async () => {
     try {
       setLoading(true);
+      setError(null);
       const [listRes, unreadRes] = await Promise.all([
         notificationService.getNotifications(),
         notificationService.getUnreadNotificationCount(),
@@ -44,6 +47,10 @@ export default function ShopOwnerNotifications() {
       setUnreadCount(unreadRes.unread_count ?? list.filter((n) => !n.is_read).length);
     } catch (err) {
       console.error('Failed to load merchant notifications:', err);
+      const msg = err.message?.includes('Network Error') || !err.response
+        ? 'Unable to load notifications: CampusCart backend server is unreachable. Please ensure Django is running on port 8000.'
+        : (err.response?.data?.message || err.response?.data?.detail || 'Unable to load notifications. Please try again.');
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -232,10 +239,33 @@ export default function ShopOwnerNotifications() {
         </button>
       </div>
 
+      {error && (
+        <div style={{ marginBottom: '1.25rem' }}>
+          <ErrorMessage
+            title="Connection Issue"
+            message={error}
+            onRetry={fetchNotifications}
+          />
+        </div>
+      )}
+
       {loading ? (
         <div style={{ padding: '3rem', textAlign: 'center' }}>
           <Spinner size="lg" message="Loading merchant notifications..." />
         </div>
+      ) : error ? (
+        <Card style={{ padding: '3rem 1.5rem', textAlign: 'center' }}>
+          <AlertTriangle size={40} color="var(--warning-500, #f59e0b)" style={{ margin: '0 auto 1rem', opacity: 0.9 }} />
+          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.4rem' }}>
+            Unable to load notifications
+          </h3>
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', maxWidth: '440px', margin: '0 auto 1.25rem' }}>
+            {error}
+          </p>
+          <Button variant="outline" size="sm" icon={RefreshCw} onClick={fetchNotifications}>
+            Retry Connection
+          </Button>
+        </Card>
       ) : filtered.length === 0 ? (
         <Card style={{ padding: '3rem 1.5rem', textAlign: 'center' }}>
           <Bell size={40} color="var(--text-muted)" style={{ margin: '0 auto 1rem', opacity: 0.6 }} />

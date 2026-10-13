@@ -94,6 +94,22 @@ const AdminManagement = () => {
     }
   };
 
+  const [resendingEmail, setResendingEmail] = useState(null);
+
+  const handleResendOtp = async (adminEmail) => {
+    try {
+      setResendingEmail(adminEmail);
+      const res = await adminManagementService.resendInvitationOtp(adminEmail);
+      alert(res.message || `Invitation OTP code resent successfully to ${adminEmail}`);
+    } catch (err) {
+      console.error('Failed to resend invitation OTP:', err);
+      const msg = err.response?.data?.message || err.response?.data?.detail || 'Failed to resend verification code.';
+      alert(msg);
+    } finally {
+      setResendingEmail(null);
+    }
+  };
+
   const handleInviteAdmin = async (e) => {
     e.preventDefault();
     setInviteError('');
@@ -537,30 +553,42 @@ const AdminManagement = () => {
                             <Lock size={12} /> Permanent
                           </span>
                         ) : (
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
-                            {(!adminUser.email_verified || !adminUser.is_active) && (
-                              <Link
-                                to={`/admin/invitation/verify?email=${encodeURIComponent(adminUser.email)}`}
-                                target="_blank"
-                                style={{ textDecoration: 'none' }}
-                                title="Open invitation verification screen for this administrator"
-                              >
-                                <Button variant="outline" size="sm" style={{ borderColor: '#6366f1', color: '#818cf8' }}>
-                                  Verify OTP
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            {!adminUser.email_verified ? (
+                              <>
+                                <Link
+                                  to={`/admin/invitation/verify?email=${encodeURIComponent(adminUser.email)}`}
+                                  target="_blank"
+                                  style={{ textDecoration: 'none' }}
+                                  title="Open invitation verification screen for this administrator"
+                                >
+                                  <Button variant="outline" size="sm" style={{ borderColor: '#6366f1', color: '#818cf8' }}>
+                                    Verify OTP
+                                  </Button>
+                                </Link>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={resendingEmail === adminUser.email}
+                                  onClick={() => handleResendOtp(adminUser.email)}
+                                  title="Resend invitation OTP code to administrator email"
+                                >
+                                  {resendingEmail === adminUser.email ? 'Sending...' : 'Resend OTP'}
                                 </Button>
-                              </Link>
+                              </>
+                            ) : (
+                              <Button
+                                variant={adminUser.is_active ? 'outline' : 'primary'}
+                                size="sm"
+                                onClick={() => handleToggleStatus(adminUser)}
+                                style={{
+                                  borderColor: adminUser.is_active ? '#ef4444' : undefined,
+                                  color: adminUser.is_active ? '#ef4444' : undefined,
+                                }}
+                              >
+                                {adminUser.is_active ? 'Deactivate' : 'Activate'}
+                              </Button>
                             )}
-                            <Button
-                              variant={adminUser.is_active ? 'outline' : 'primary'}
-                              size="sm"
-                              onClick={() => handleToggleStatus(adminUser)}
-                              style={{
-                                borderColor: adminUser.is_active ? '#ef4444' : undefined,
-                                color: adminUser.is_active ? '#ef4444' : undefined,
-                              }}
-                            >
-                              {adminUser.is_active ? 'Deactivate' : 'Activate'}
-                            </Button>
                           </div>
                         )}
                       </td>

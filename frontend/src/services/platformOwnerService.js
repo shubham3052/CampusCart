@@ -196,6 +196,40 @@ const platformOwnerService = {
     const response = await api.post('/platform-owner/change-password/', data);
     return response.data;
   },
+
+  // Step 18A: Platform Owner Staged Password Change with Full 2FA
+  async startPasswordChange(current_password) {
+    const response = await api.post('/platform-owner/security/password-change/start/', {
+      current_password,
+    });
+    return response.data;
+  },
+
+  async verifyEmailPasswordChange(stage_token, code) {
+    const response = await api.post('/platform-owner/security/password-change/verify-email/', {
+      stage_token,
+      code,
+    });
+    return response.data;
+  },
+
+  async verifyTOTPPasswordChange(stage_token, code) {
+    const response = await api.post('/platform-owner/security/password-change/verify-totp/', {
+      stage_token,
+      code,
+    });
+    return response.data;
+  },
+
+  async completePasswordChange(stage_token, new_password, confirm_password) {
+    const response = await api.post('/platform-owner/security/password-change/complete/', {
+      stage_token,
+      new_password,
+      confirm_password,
+    });
+    return response.data;
+  },
 };
 
 export default platformOwnerService;
+

@@ -20,6 +20,14 @@ from .views import (
     AuditLogOversightViewSet,
     PlatformOwnerProfileView,
     PlatformOwnerChangePasswordView,
+    PlatformOwnerPasswordChangeStartView,
+    PlatformOwnerPasswordChangeVerifyEmailView,
+    PlatformOwnerPasswordChangeVerifyTOTPView,
+    PlatformOwnerPasswordChangeCompleteView,
+    PlatformOwnerTOTPStatusView,
+    PlatformOwnerTOTPSetupView,
+    PlatformOwnerTOTPConfirmView,
+    PlatformOwnerTOTPResetView,
 )
 
 router = DefaultRouter()
@@ -43,5 +51,18 @@ urlpatterns = [
     path('locations/', LocationOversightView.as_view(), name='platform-owner-locations'),
     path('profile/', PlatformOwnerProfileView.as_view(), name='platform-owner-profile'),
     path('change-password/', PlatformOwnerChangePasswordView.as_view(), name='platform-owner-change-password'),
+
+    # Platform Owner Staged Password Change with Full 2FA (Step 18A)
+    path('security/password-change/start/', PlatformOwnerPasswordChangeStartView.as_view(), name='platform-owner-password-change-start'),
+    path('security/password-change/verify-email/', PlatformOwnerPasswordChangeVerifyEmailView.as_view(), name='platform-owner-password-change-verify-email'),
+    path('security/password-change/verify-totp/', PlatformOwnerPasswordChangeVerifyTOTPView.as_view(), name='platform-owner-password-change-verify-totp'),
+    path('security/password-change/complete/', PlatformOwnerPasswordChangeCompleteView.as_view(), name='platform-owner-password-change-complete'),
+
+    # Microsoft Authenticator (TOTP) Security Management (Step 18)
+    path('security/totp/status/', PlatformOwnerTOTPStatusView.as_view(), name='platform-owner-totp-status'),
+    path('security/totp/setup/', PlatformOwnerTOTPSetupView.as_view(), name='platform-owner-totp-setup'),
+    path('security/totp/confirm/', PlatformOwnerTOTPConfirmView.as_view(), name='platform-owner-totp-confirm'),
+    path('security/totp/reset/', PlatformOwnerTOTPResetView.as_view(), name='platform-owner-totp-reset'),
+
     path('', include(router.urls)),
 ]

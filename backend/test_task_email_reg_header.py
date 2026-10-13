@@ -12,6 +12,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
+from django.conf import settings
+from django.core import mail
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -23,6 +25,10 @@ def run_tests():
     print("=" * 80)
     print("STARTING EMAIL REGISTRATION, OTP VERIFICATION, LOGIN & LOGOUT TEST SUITE")
     print("=" * 80)
+
+    # Enforce in-memory email backend to prevent sending real outbound emails during tests
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     client = APIClient()
     import random

@@ -16,16 +16,19 @@ const EmailOtpModal = ({
   isOpen,
   email,
   purpose = 'EMAIL_VERIFICATION',
+  onVerify,
+  onResend,
   onSuccess,
   onClose,
   canDismiss = true,
   title = 'Verify Your Email Address',
   subtitle = 'We sent a 6-digit verification code to',
+  initialError = '',
 }) => {
   const [digits, setDigits] = useState(['', '', '', '', '', '']);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResending, setIsResending] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState(initialError || '');
   const [successMsg, setSuccessMsg] = useState('');
   const [cooldown, setCooldown] = useState(60);
   const [verifiedSuccess, setVerifiedSuccess] = useState(false);
@@ -36,7 +39,7 @@ const EmailOtpModal = ({
   useEffect(() => {
     if (isOpen) {
       setDigits(['', '', '', '', '', '']);
-      setErrorMsg('');
+      setErrorMsg(initialError || '');
       setSuccessMsg('');
       setVerifiedSuccess(false);
       setCooldown(60);
@@ -44,7 +47,7 @@ const EmailOtpModal = ({
         inputRefs.current[0]?.focus();
       }, 150);
     }
-  }, [isOpen]);
+  }, [isOpen, initialError]);
 
   // Live countdown timer
   useEffect(() => {
@@ -122,9 +125,14 @@ const EmailOtpModal = ({
     setIsSubmitting(true);
     setErrorMsg('');
     try {
-      const response = await authService.verifyEmailOtp(email, otpCode, purpose);
+      let response;
+      if (onVerify) {
+        response = await onVerify(otpCode);
+      } else {
+        response = await authService.verifyEmailOtp(email, otpCode, purpose);
+      }
       setVerifiedSuccess(true);
-      setSuccessMsg(response.message || 'Email verified successfully!');
+      setSuccessMsg(response?.message || 'Verification successful!');
       setTimeout(() => {
         if (onSuccess) onSuccess(response);
         if (onClose) onClose();
@@ -148,8 +156,13 @@ const EmailOtpModal = ({
     setErrorMsg('');
     setSuccessMsg('');
     try {
-      const response = await authService.resendEmailOtp(email, purpose);
-      setSuccessMsg(response.message || 'A new verification code has been dispatched.');
+      let response;
+      if (onResend) {
+        response = await onResend();
+      } else {
+        response = await authService.resendEmailOtp(email, purpose);
+      }
+      setSuccessMsg(response?.message || 'A new verification code has been dispatched.');
       setCooldown(60);
       setDigits(['', '', '', '', '', '']);
       inputRefs.current[0]?.focus();

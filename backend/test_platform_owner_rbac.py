@@ -59,10 +59,17 @@ def clear_auth():
     client.credentials()
 
 
+from django.conf import settings
+from django.core import mail
+
 def run_tests():
     print("=" * 80)
     print("RUNNING PLATFORM OWNER ROLE & RBAC AUTHORIZATION TEST SUITE")
     print("=" * 80)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     # Setup or retrieve test accounts
     student, _ = User.objects.get_or_create(
@@ -275,9 +282,10 @@ def run_tests():
         "current_password": "OwnerPass123!",
         "new_password": "NewPlatformOwnerPass2026!"
     }, format='json')
-    assert res.status_code == 200
-    assert res.data["success"] is True
-    print("[PASS] 11.3 Change password with valid credentials -> 200 OK")
+    assert res.status_code == 400
+    assert res.data["success"] is False
+    assert "two-factor" in res.data["message"].lower() or "disabled" in res.data["message"].lower()
+    print("[PASS] 11.3 Direct password change rejected (Step 18A Full 2FA Enforced) -> 400 Bad Request")
 
     # Reset password back for tests continuity
     owner.set_password("OwnerPass123!")

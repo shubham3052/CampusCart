@@ -25,6 +25,7 @@ from users.models import EmailVerificationOTP, AuditLog
 from users.permissions import IsAdmin
 from users.services.email_service import EmailService
 from users.services.audit_service import AuditService
+from users.services.role_service import RoleService
 
 User = get_user_model()
 
@@ -82,15 +83,14 @@ class AdminInviteSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         email_clean = value.strip().lower()
+        if email_clean == 'garibhokya@gmail.com':
+            raise serializers.ValidationError("Platform Owner cannot be invited or modified as an administrator.")
         existing_user = User.objects.filter(email__iexact=email_clean).first()
         if existing_user:
-            if existing_user.role in [User.Role.ADMIN, User.Role.PLATFORM_OWNER] and existing_user.is_active:
+            if getattr(existing_user, 'is_platform_owner', False) or existing_user.has_role(User.Role.PLATFORM_OWNER):
+                raise serializers.ValidationError("Platform Owner cannot be invited or modified as an administrator.")
+            if (existing_user.role in [User.Role.ADMIN, User.Role.PLATFORM_OWNER] or existing_user.has_role(User.Role.ADMIN)) and existing_user.is_active:
                 raise serializers.ValidationError("An active administrator or system owner account already exists with this email.")
-            if existing_user.role not in [User.Role.ADMIN, User.Role.PLATFORM_OWNER]:
-                raise serializers.ValidationError(
-                    f"An account with this email already exists with role '{existing_user.role}'. "
-                    "Cannot invite an existing student, shop owner, or delivery courier as administrator."
-                )
         return email_clean
 
 
@@ -151,7 +151,11 @@ class AdminManagementListView(APIView):
         responses={200: AdminListSerializer(many=True)}
     )
     def get(self, request):
-        qs = User.objects.filter(role__in=[User.Role.ADMIN, User.Role.PLATFORM_OWNER]).order_by('-created_at')
+        from django.db.models import Q
+        qs = User.objects.filter(
+            Q(role__in=[User.Role.ADMIN, User.Role.PLATFORM_OWNER]) |
+            Q(role_memberships__role__in=[User.Role.ADMIN, User.Role.PLATFORM_OWNER], role_memberships__is_active=True)
+        ).distinct().order_by('-created_at')
 
         # Optional filters
         is_active = request.query_params.get('is_active')
@@ -203,8 +207,37 @@ class AdminInviteView(APIView):
         first_name = parts[0]
         last_name = parts[1] if len(parts) > 1 else ''
 
+        # Platform Owner Protection
+        if email_clean == 'garibhokya@gmail.com':
+            AuditService.log(
+                action=AuditLog.Action.OWNER_REJECTED_MODIFICATION,
+                actor=request.user,
+                actor_email=request.user.email,
+                target_model='User',
+                metadata={"operation": "INVITE_ADMIN_REJECTED", "reason": "Platform Owner cannot be invited or modified as an administrator."},
+                request=request
+            )
+            return Response(
+                {"success": False, "message": "Platform Owner cannot be invited or modified as an administrator."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         # Get or create pending admin user
         user = User.objects.filter(email__iexact=email_clean).first()
+        if user and (getattr(user, 'is_platform_owner', False) or user.has_role(User.Role.PLATFORM_OWNER)):
+            AuditService.log(
+                action=AuditLog.Action.OWNER_REJECTED_MODIFICATION,
+                actor=request.user,
+                actor_email=request.user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"operation": "INVITE_ADMIN_REJECTED", "reason": "Platform Owner cannot be invited or modified as an administrator."},
+                request=request
+            )
+            return Response(
+                {"success": False, "message": "Platform Owner cannot be invited or modified as an administrator."},
+                status=status.HTTP_403_FORBIDDEN
+            )
         if not user:
             user = User.objects.create(
                 username=email_clean,
@@ -221,16 +254,17 @@ class AdminInviteView(APIView):
             user.set_unusable_password()
             user.save()
         else:
-            # Refresh pending user details
-            user.role = User.Role.ADMIN
-            user.is_active = False
-            user.email_verified = False
-            user.approval_status = User.ApprovalStatus.PENDING
-            if first_name:
+            # Refresh pending user details or preserve active existing user (e.g. Student)
+            if not user.is_active or not user.has_usable_password():
+                user.role = User.Role.ADMIN
+                user.is_active = False
+                user.email_verified = False
+                user.approval_status = User.ApprovalStatus.PENDING
+            if first_name and not user.first_name:
                 user.first_name = first_name
-            if last_name:
+            if last_name and not user.last_name:
                 user.last_name = last_name
-            if department:
+            if department and not user.department:
                 user.department = department
             user.save()
 
@@ -332,7 +366,7 @@ class AdminVerifyInvitationOTPView(APIView):
         email_clean = data['email'].strip().lower()
         candidate_otp = data['otp'].strip()
 
-        user = User.objects.filter(email__iexact=email_clean, role=User.Role.ADMIN).first()
+        user = User.objects.filter(email__iexact=email_clean).first()
         if not user:
             return Response(
                 {"success": False, "message": "No administrator invitation found for this email."},
@@ -349,7 +383,34 @@ class AdminVerifyInvitationOTPView(APIView):
         if not success:
             return Response({"success": False, "message": message}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Issue temporary signed token valid for 15 minutes to set application password
+        # If existing verified user with a password, assign ADMIN role immediately
+        if user.has_usable_password() and user.email_verified and user.is_active:
+            RoleService.assign_role(user, User.Role.ADMIN, assigned_by=None, request=request)
+            user.is_staff = True
+            user.save(update_fields=['is_staff'])
+
+            AuditService.log(
+                action=AuditLog.Action.ADMIN_ACTIVATED,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"status": "ACTIVATED", "auth_mechanism": "INVITATION_OTP_EXISTING_USER"},
+                request=request
+            )
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Administrator role successfully granted to your existing account. You may now log in or switch to Administrator.",
+                    "requires_password_setup": False,
+                    "email": user.email,
+                    "roles": user.roles,
+                },
+                status=status.HTTP_200_OK
+            )
+
+        # Brand new admin account: issue temporary signed token valid for 15 minutes to set application password
         invitation_token = signing.dumps(
             {
                 'email': email_clean,
@@ -364,6 +425,7 @@ class AdminVerifyInvitationOTPView(APIView):
             {
                 "success": True,
                 "message": "Email verification confirmed. Please set your application password.",
+                "requires_password_setup": True,
                 "invitation_token": invitation_token
             },
             status=status.HTTP_200_OK
@@ -398,10 +460,11 @@ class AdminSetPasswordView(APIView):
         if not user:
             return Response({"success": False, "message": "User account not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if user.role != User.Role.ADMIN:
+        if user.role != User.Role.ADMIN and not user.has_role(User.Role.ADMIN):
             return Response({"success": False, "message": "Account does not have administrator privileges."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Set secure password using PBKDF2
+        # Set secure password using PBKDF2 and assign ADMIN role
+        RoleService.assign_role(user, User.Role.ADMIN, assigned_by=None, request=request)
         user.set_password(password)
         user.is_active = True
         user.email_verified = True
@@ -456,7 +519,16 @@ class AdminToggleStatusView(APIView):
             return Response({"success": False, "message": "Administrator account not found."}, status=status.HTTP_404_NOT_FOUND)
 
         # Protection 1: System Owner cannot be deactivated
-        if getattr(target, 'is_platform_owner', False) or target.email.lower() == 'garibhokya@gmail.com':
+        if getattr(target, 'is_platform_owner', False) or target.email.lower() == 'garibhokya@gmail.com' or target.has_role(User.Role.PLATFORM_OWNER):
+            AuditService.log(
+                action=AuditLog.Action.OWNER_REJECTED_DELETION,
+                actor=request.user,
+                actor_email=request.user.email,
+                target_model='User',
+                target_id=str(target.id),
+                metadata={"operation": "DEACTIVATE_OWNER_REJECTED", "reason": "System Owner account cannot be deactivated or modified."},
+                request=request
+            )
             return Response(
                 {
                     "success": False,
@@ -475,6 +547,17 @@ class AdminToggleStatusView(APIView):
                         "success": False,
                         "error": "LastAdminProtection",
                         "message": "Cannot deactivate the only remaining active administrator. At least one active administrator must remain on the platform."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        else:
+            # Protection 3: Prevent activating an unverified invited administrator
+            if not target.email_verified:
+                return Response(
+                    {
+                        "success": False,
+                        "error": "UnverifiedAdminProtection",
+                        "message": "Cannot activate an unverified administrator. The invited administrator must complete email OTP verification and set their password first."
                     },
                     status=status.HTTP_400_BAD_REQUEST
                 )

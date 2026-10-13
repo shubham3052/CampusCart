@@ -2,10 +2,17 @@ import re
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
+from django.core import signing
+from django.utils import timezone
+from users.models import EmailVerificationOTP, AuditLog
+from users.services.email_service import EmailService
+from users.services.audit_service import AuditService
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 
 User = get_user_model()
+
 
 class RegisterSerializer(serializers.Serializer):
     """
@@ -33,6 +40,8 @@ class RegisterSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         email_clean = value.strip().lower()
+        if email_clean == 'garibhokya@gmail.com':
+            raise serializers.ValidationError("An account with this email address already exists.")
         existing = User.objects.filter(email__iexact=email_clean).first()
         if existing:
             if not existing.email_verified:
@@ -191,8 +200,74 @@ class LoginSerializer(serializers.Serializer):
         if not user.is_active:
             raise serializers.ValidationError("This user account has been disabled. Please contact the administrator.")
 
-        # Mint JWT Tokens
+        # PLATFORM OWNER MANDATORY 2FA CHECK
+        is_owner = (
+            getattr(user, 'is_platform_owner', False)
+            or user.has_role(User.Role.PLATFORM_OWNER)
+            or user.email.lower() == 'garibhokya@gmail.com'
+        )
+
+        if is_owner:
+            # Audit log password verification success
+            AuditService.log(
+                action=AuditLog.Action.OWNER_LOGIN_PASSWORD_SUCCESS,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"stage": "PASSWORD_VERIFIED"}
+            )
+
+            # Generate and dispatch 6-digit OTP using existing secure EmailService
+            sent, dispatch_msg, otp_rec = EmailService.create_and_send_otp(
+                email=user.email,
+                purpose=EmailVerificationOTP.Purpose.OWNER_2FA,
+                user=user
+            )
+
+            if not sent:
+                raise serializers.ValidationError(dispatch_msg)
+
+            AuditService.log(
+                action=AuditLog.Action.OWNER_OTP_SENT,
+                actor=user,
+                actor_email=user.email,
+                target_model='User',
+                target_id=str(user.id),
+                metadata={"stage": "OWNER_2FA_DISPATCHED", "otp_id": otp_rec.id if otp_rec else None}
+            )
+
+            # Mint signed, time-limited pre-authentication token (valid 5 minutes)
+            pre_auth_token = signing.dumps(
+                {
+                    'user_id': user.id,
+                    'email': user.email.lower(),
+                    'purpose': 'OWNER_2FA',
+                    'ts': timezone.now().timestamp()
+                },
+                salt='owner-2fa-preauth-salt'
+            )
+
+            # DO NOT return JWT access/refresh tokens before OTP verification!
+            return {
+                "requires_2fa": True,
+                "email": user.email,
+                "pre_auth_token": pre_auth_token,
+                "role": User.Role.PLATFORM_OWNER,
+                "active_role": User.Role.PLATFORM_OWNER,
+                "roles": [User.Role.PLATFORM_OWNER],
+                "message": "Platform Owner 2FA verification required. Enter the 6-digit code sent to your registered email.",
+            }
+
+        # Mint JWT Tokens for regular authenticated users
+        active_role = getattr(user, 'active_role', user.role)
+        roles = user.roles
+
         refresh = RefreshToken.for_user(user)
+        refresh['roles'] = roles
+        refresh['active_role'] = active_role
+        refresh.access_token['roles'] = roles
+        refresh.access_token['active_role'] = active_role
 
         data = {
             "access": str(refresh.access_token),
@@ -202,7 +277,9 @@ class LoginSerializer(serializers.Serializer):
                 "name": user.name,
                 "email": user.email,
                 "phone": user.phone_number,
-                "role": user.role,
+                "role": active_role,
+                "active_role": active_role,
+                "roles": roles,
                 "approval_status": getattr(user, 'approval_status', 'APPROVED'),
                 "email_verified": user.email_verified,
                 "college_id": user.college_id,
@@ -216,6 +293,30 @@ class LoginSerializer(serializers.Serializer):
             data["message"] = "Please verify your email before accessing all features."
 
         return data
+
+
+class SwitchRoleSerializer(serializers.Serializer):
+    """
+    Input serializer for switching active role in a multi-role session.
+    """
+    role = serializers.CharField(
+        required=False,
+        help_text="Target role to activate (e.g. STUDENT, SHOP_OWNER, DELIVERY_AGENT, ADMIN)"
+    )
+    target_role = serializers.CharField(
+        required=False,
+        help_text="Alias for role"
+    )
+
+    def validate(self, attrs):
+        role = attrs.get('role') or attrs.get('target_role')
+        if not role:
+            raise serializers.ValidationError("Role or target_role must be provided.")
+        role_clean = str(role).strip().upper()
+        if role_clean not in User.Role.values:
+            raise serializers.ValidationError(f"Invalid role '{role}'. Allowed roles: {list(User.Role.values)}")
+        attrs['role'] = role_clean
+        return attrs
 
 
 class LogoutSerializer(serializers.Serializer):
@@ -372,3 +473,231 @@ class ConfirmEmailChangeSerializer(serializers.Serializer):
             raise serializers.ValidationError("OTP code must consist of exactly 6 numerical digits.")
         return val
 
+
+class Owner2FAVerifySerializer(serializers.Serializer):
+    """
+    Input serializer for Platform Owner 2FA OTP verification.
+    """
+    email = serializers.EmailField(required=True)
+    otp = serializers.CharField(min_length=6, max_length=6, required=True)
+    pre_auth_token = serializers.CharField(required=True)
+
+    def validate_otp(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Verification code must consist of exactly 6 digits.")
+        return val
+
+
+class Owner2FAResendSerializer(serializers.Serializer):
+    """
+    Input serializer for Platform Owner 2FA OTP resend.
+    """
+    email = serializers.EmailField(required=True)
+    pre_auth_token = serializers.CharField(required=True)
+
+
+class OwnerTOTPVerifySerializer(serializers.Serializer):
+    """
+    Input serializer for Platform Owner Microsoft Authenticator (TOTP) login verification.
+    """
+    pre_auth_token = serializers.CharField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Authenticator code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerTOTPConfirmSerializer(serializers.Serializer):
+    """
+    Input serializer for Platform Owner confirming TOTP setup during enrollment.
+    """
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Authenticator code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerTOTPResetSerializer(serializers.Serializer):
+    """
+    Input serializer for Platform Owner resetting TOTP.
+    Requires account password + current authenticator code.
+    """
+    password = serializers.CharField(required=True, write_only=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Authenticator code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerPasswordChangeStartSerializer(serializers.Serializer):
+    """
+    Step 18A: Stage 1 input serializer for starting Platform Owner password change.
+    Requires verifying the current password before sending Gmail OTP.
+    """
+    current_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        style={'input_type': 'password'}
+    )
+
+
+class OwnerPasswordChangeVerifyEmailSerializer(serializers.Serializer):
+    """
+    Step 18A: Stage 2 input serializer for verifying Gmail OTP.
+    """
+    stage_token = serializers.CharField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Verification code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerPasswordChangeVerifyTOTPSerializer(serializers.Serializer):
+    """
+    Step 18A: Stage 3 input serializer for verifying Microsoft Authenticator TOTP.
+    """
+    stage_token = serializers.CharField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Authenticator code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerPasswordChangeCompleteSerializer(serializers.Serializer):
+    """
+    Step 18A: Stage 4 input serializer for finalizing password change with new password.
+    Requires signed challenge proving both Factor 1 (Gmail OTP) and Factor 2 (TOTP).
+    """
+    stage_token = serializers.CharField(required=True)
+    new_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8,
+        style={'input_type': 'password'}
+    )
+    confirm_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8,
+        style={'input_type': 'password'}
+    )
+
+    def validate(self, data):
+        new_password = data.get('new_password')
+        confirm_password = data.get('confirm_password')
+
+        if new_password != confirm_password:
+            raise serializers.ValidationError({"confirm_password": "New password and confirmation do not match."})
+
+        if len(new_password) < 8:
+            raise serializers.ValidationError({"new_password": "Password must be at least 8 characters long."})
+
+        if not re.search(r'\d', new_password):
+            raise serializers.ValidationError({"new_password": "Password must contain at least one numerical digit."})
+
+        try:
+            validate_password(new_password)
+        except Exception as e:
+            messages = getattr(e, 'messages', [str(e)])
+            raise serializers.ValidationError({"new_password": messages[0] if messages else "Password does not meet complexity requirements."})
+
+        return data
+
+
+class OwnerPasswordSetupRequestSerializer(serializers.Serializer):
+    """
+    Step 19: Input serializer to request initial password setup for Platform Owner.
+    Only the authorized Platform Owner email (garibhokya@gmail.com) can request setup.
+    """
+    email = serializers.EmailField(required=True)
+
+
+class OwnerPasswordSetupVerifyEmailSerializer(serializers.Serializer):
+    """
+    Step 19: Input serializer to verify Gmail OTP code.
+    """
+    stage_token = serializers.CharField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Verification code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerPasswordSetupResendEmailSerializer(serializers.Serializer):
+    """
+    Step 19: Input serializer to resend Gmail OTP code.
+    """
+    stage_token = serializers.CharField(required=True)
+
+
+class OwnerPasswordSetupVerifyTOTPSerializer(serializers.Serializer):
+    """
+    Step 19: Input serializer to verify Microsoft Authenticator TOTP code.
+    """
+    stage_token = serializers.CharField(required=True)
+    code = serializers.CharField(min_length=6, max_length=6, required=True)
+
+    def validate_code(self, value):
+        val = str(value).strip()
+        if not re.match(r'^\d{6}$', val):
+            raise serializers.ValidationError("Authenticator code must consist of exactly 6 digits.")
+        return val
+
+
+class OwnerPasswordSetupCompleteSerializer(serializers.Serializer):
+    """
+    Step 19: Input serializer to set new password after full 2FA verification.
+    """
+    stage_token = serializers.CharField(required=True)
+    new_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8,
+        style={'input_type': 'password'}
+    )
+    confirm_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8,
+        style={'input_type': 'password'}
+    )
+
+    def validate(self, data):
+        new_password = data.get('new_password')
+        confirm_password = data.get('confirm_password')
+
+        if new_password != confirm_password:
+            raise serializers.ValidationError({"confirm_password": "New password and confirmation do not match."})
+
+        if len(new_password) < 8:
+            raise serializers.ValidationError({"new_password": "Password must be at least 8 characters long."})
+
+        if not re.search(r'\d', new_password):
+            raise serializers.ValidationError({"new_password": "Password must contain at least one numerical digit."})
+
+        try:
+            validate_password(new_password)
+        except Exception as e:
+            messages = getattr(e, 'messages', [str(e)])
+            raise serializers.ValidationError({"new_password": messages[0] if messages else "Password does not meet complexity requirements."})
+
+        return data

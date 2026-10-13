@@ -14,10 +14,17 @@ from orders.models import Order
 from printing.models import PrintingOrder
 from delivery.models import Delivery
 
+from django.conf import settings
+from django.core import mail
+
 def run_regression_audit():
     print("=" * 80)
     print("FINAL WHOLE PROJECT COMPREHENSIVE REGRESSION AUDIT SUITE")
     print("=" * 80)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
 
     client = APIClient()
 

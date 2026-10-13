@@ -431,6 +431,8 @@ const GoogleMapView = ({
       className={`campus-map-wrapper ${className}`}
       style={{
         position: 'relative',
+        isolation: 'isolate',
+        zIndex: 1,
         width: '100%',
         height,
         minHeight: '280px',

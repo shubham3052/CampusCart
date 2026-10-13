@@ -8,8 +8,147 @@ const authService = {
     const response = await api.post('/auth/login/', { email, password });
     const data = response.data;
 
+    // Platform Owner 2FA Challenge: Return pre-auth challenge without storing tokens
+    if (data.requires_2fa) {
+      return {
+        requires_2fa: true,
+        email: data.email,
+        pre_auth_token: data.pre_auth_token,
+        role: data.role || 'PLATFORM_OWNER',
+        active_role: data.active_role || 'PLATFORM_OWNER',
+        roles: data.roles || ['PLATFORM_OWNER'],
+        message: data.message,
+      };
+    }
+
     const accessToken = data.tokens?.access || data.access;
     const refreshToken = data.tokens?.refresh || data.refresh;
+    const user = data.user;
+
+    if (accessToken) {
+      localStorage.setItem('access_token', accessToken);
+    }
+    if (refreshToken) {
+      localStorage.setItem('refresh_token', refreshToken);
+    }
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user));
+    }
+
+    return { user, accessToken, refreshToken };
+  },
+
+  /**
+   * Verify Platform Owner 2FA OTP code (Step 17 & 18)
+   */
+  async verifyOwner2FA(email, otp, preAuthToken) {
+    const response = await api.post('/auth/owner/verify-2fa/', {
+      email,
+      otp,
+      pre_auth_token: preAuthToken,
+    });
+    const data = response.data;
+
+    // Platform Owner TOTP Challenge: Return pre-auth challenge without storing tokens
+    if (data.requires_totp) {
+      return {
+        requires_totp: true,
+        email: data.email,
+        pre_auth_token: data.pre_auth_token,
+        role: data.active_role || 'PLATFORM_OWNER',
+        active_role: data.active_role || 'PLATFORM_OWNER',
+        roles: data.roles || ['PLATFORM_OWNER'],
+        message: data.message,
+      };
+    }
+
+    const accessToken = data.tokens?.access || data.access;
+    const refreshToken = data.tokens?.refresh || data.refresh;
+    const user = data.user;
+
+    if (accessToken) {
+      localStorage.setItem('access_token', accessToken);
+    }
+    if (refreshToken) {
+      localStorage.setItem('refresh_token', refreshToken);
+    }
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user));
+    }
+
+    return { user, accessToken, refreshToken, message: data.message };
+  },
+
+  /**
+   * Verify Platform Owner Microsoft Authenticator (TOTP) code (Step 18)
+   */
+  async verifyOwnerTOTP(preAuthToken, code) {
+    const response = await api.post('/auth/owner/verify-totp/', {
+      pre_auth_token: preAuthToken,
+      code,
+    });
+    const data = response.data;
+
+    const accessToken = data.tokens?.access || data.access;
+    const refreshToken = data.tokens?.refresh || data.refresh;
+    const user = data.user;
+
+    if (accessToken) {
+      localStorage.setItem('access_token', accessToken);
+    }
+    if (refreshToken) {
+      localStorage.setItem('refresh_token', refreshToken);
+    }
+    if (user) {
+      localStorage.setItem('user', JSON.stringify(user));
+    }
+
+    return { user, accessToken, refreshToken, message: data.message };
+  },
+
+  /**
+   * Platform Owner TOTP Security Settings APIs (Step 18)
+   */
+  async getOwnerTOTPStatus() {
+    const response = await api.get('/platform-owner/security/totp/status/');
+    return response.data;
+  },
+
+  async setupOwnerTOTP() {
+    const response = await api.post('/platform-owner/security/totp/setup/');
+    return response.data;
+  },
+
+  async confirmOwnerTOTP(code) {
+    const response = await api.post('/platform-owner/security/totp/confirm/', { code });
+    return response.data;
+  },
+
+  async resetOwnerTOTP(password, code) {
+    const response = await api.post('/platform-owner/security/totp/reset/', { password, code });
+    return response.data;
+  },
+
+  /**
+   * Resend Platform Owner 2FA OTP code
+   */
+  async resendOwner2FA(email, preAuthToken) {
+    const response = await api.post('/auth/owner/resend-2fa/', {
+      email,
+      pre_auth_token: preAuthToken,
+    });
+    return response.data;
+  },
+
+  /**
+   * Switch the user's active session role
+   */
+  async switchRole(role) {
+    const response = await api.post('/auth/switch-role/', { role });
+    const data = response.data;
+
+    const accessToken = data.access;
+    const refreshToken = data.refresh;
     const user = data.user;
 
     if (accessToken) {
@@ -29,6 +168,11 @@ const authService = {
    * Register a new user
    */
   async register(userData) {
+    // Clear any previous session from localStorage before registering a new user
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    localStorage.removeItem('user');
+
     // Normalise name and phone fields to match Django RegisterSerializer
     const payload = {
       name: userData.name || `${userData.first_name || ''} ${userData.last_name || ''}`.trim(),
@@ -49,17 +193,17 @@ const authService = {
     const refreshToken = data.tokens?.refresh || data.refresh;
     const user = data.user;
 
-    if (user?.email_verified) {
-      if (accessToken) {
-        localStorage.setItem('access_token', accessToken);
-      }
-      if (refreshToken) {
-        localStorage.setItem('refresh_token', refreshToken);
-      }
+    if (accessToken) {
+      localStorage.setItem('access_token', accessToken);
+    }
+    if (refreshToken) {
+      localStorage.setItem('refresh_token', refreshToken);
+    }
+    if (user) {
       localStorage.setItem('user', JSON.stringify(user));
     }
 
-    return { user, accessToken, refreshToken, message: data.message };
+    return { user, accessToken, refreshToken, message: data.message, email_sent: data.email_sent };
   },
 
   /**
@@ -224,6 +368,37 @@ const authService = {
     return response.data;
   },
 
+  /**
+   * Platform Owner Secure Initial Password Setup (Step 19)
+   */
+  async requestOwnerPasswordSetup(email) {
+    const response = await api.post('/auth/owner/password-setup/request/', { email });
+    return response.data;
+  },
+
+  async resendOwnerPasswordSetupOTP(stageToken) {
+    const response = await api.post('/auth/owner/password-setup/resend-email/', { stage_token: stageToken });
+    return response.data;
+  },
+
+  async verifyOwnerPasswordSetupEmail(stageToken, code) {
+    const response = await api.post('/auth/owner/password-setup/verify-email/', { stage_token: stageToken, code });
+    return response.data;
+  },
+
+  async verifyOwnerPasswordSetupTOTP(stageToken, code) {
+    const response = await api.post('/auth/owner/password-setup/verify-totp/', { stage_token: stageToken, code });
+    return response.data;
+  },
+
+  async completeOwnerPasswordSetup(stageToken, newPassword, confirmPassword) {
+    const response = await api.post('/auth/owner/password-setup/complete/', {
+      stage_token: stageToken,
+      new_password: newPassword,
+      confirm_password: confirmPassword,
+    });
+    return response.data;
+  },
 
   /**
    * Read stored token from localStorage

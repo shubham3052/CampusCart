@@ -5,6 +5,9 @@ import { useAuth } from '../../context/AuthContext';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import ErrorMessage from '../../components/common/ErrorMessage';
+import EmailOtpModal from '../../components/auth/EmailOtpModal';
+import TotpModal from '../../components/auth/TotpModal';
+import OwnerPasswordSetupModal from '../../components/auth/OwnerPasswordSetupModal';
 
 const PlatformOwnerLogin = () => {
   const [email, setEmail] = useState('');
@@ -12,8 +15,13 @@ const PlatformOwnerLogin = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showOwner2faModal, setShowOwner2faModal] = useState(false);
+  const [owner2faData, setOwner2faData] = useState(null);
+  const [showTotpModal, setShowTotpModal] = useState(false);
+  const [ownerTotpData, setOwnerTotpData] = useState(null);
+  const [showSetupModal, setShowSetupModal] = useState(false);
 
-  const { login, logout } = useAuth();
+  const { login, logout, verifyOwner2FA, verifyOwnerTOTP, resendOwner2FA } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -28,7 +36,18 @@ const PlatformOwnerLogin = () => {
     setIsSubmitting(true);
     try {
       const result = await login(email, password);
-      const role = result.user?.role;
+
+      // Platform Owner Mandatory 2FA Challenge
+      if (result.requires_2fa) {
+        setOwner2faData({
+          email: result.email,
+          preAuthToken: result.pre_auth_token,
+        });
+        setShowOwner2faModal(true);
+        return;
+      }
+
+      const role = result.user?.active_role || result.user?.role;
 
       if (role !== 'PLATFORM_OWNER') {
         await logout();
@@ -51,12 +70,6 @@ const PlatformOwnerLogin = () => {
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const quickFill = () => {
-    setEmail('garibhokya@gmail.com');
-    setPassword('SystemOwner2026!');
-    setFormError('');
   };
 
   return (
@@ -262,6 +275,24 @@ const PlatformOwnerLogin = () => {
             </div>
           </div>
 
+          <div style={{ textAlign: 'right', marginTop: '-0.75rem', marginBottom: '1.25rem' }}>
+            <button
+              type="button"
+              onClick={() => setShowSetupModal(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#a5b4fc',
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                fontWeight: 600,
+                padding: 0,
+              }}
+            >
+              Initial Password Setup / Forgot Password?
+            </button>
+          </div>
+
           <Button
             type="submit"
             variant="primary"
@@ -278,50 +309,6 @@ const PlatformOwnerLogin = () => {
           </Button>
         </form>
 
-        {/* Quick Fill Credentials Helper */}
-        <div
-          style={{
-            marginTop: '1.5rem',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            backgroundColor: 'rgba(30, 41, 59, 0.7)',
-            border: '1px solid rgba(99, 102, 241, 0.2)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: '0.75rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#a5b4fc' }}>
-              Evaluation Credentials
-            </div>
-            <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-              owner@platform.edu / PlatformOwner2026!
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={quickFill}
-            style={{
-              padding: '0.35rem 0.75rem',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid #4f46e5',
-              background: '#312e81',
-              color: '#ffffff',
-              fontSize: '0.75rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '0.35rem',
-            }}
-          >
-            <Sparkles size={14} /> Quick Fill
-          </button>
-        </div>
-
         {/* Return to standard login */}
         <div style={{ textAlign: 'center', marginTop: '1.5rem' }}>
           <Link
@@ -337,6 +324,62 @@ const PlatformOwnerLogin = () => {
           </Link>
         </div>
       </div>
+
+      {/* Platform Owner Initial Password Setup Modal (Step 19) */}
+      <OwnerPasswordSetupModal
+        isOpen={showSetupModal}
+        initialEmail={email || 'garibhokya@gmail.com'}
+        onClose={() => setShowSetupModal(false)}
+        onSuccess={(em) => {
+          setEmail(em);
+          setShowSetupModal(false);
+        }}
+      />
+
+      {/* Platform Owner Mandatory 2FA Verification Modal */}
+      {owner2faData && (
+        <EmailOtpModal
+          isOpen={showOwner2faModal}
+          email={owner2faData.email}
+          title="Platform Owner Verification"
+          subtitle="Enter the 6-digit verification code sent to your registered email."
+          onVerify={async (otp) => {
+            const res = await verifyOwner2FA(owner2faData.email, otp, owner2faData.preAuthToken);
+            if (res?.requires_totp) {
+              setOwnerTotpData({
+                preAuthToken: res.pre_auth_token,
+              });
+              setShowOwner2faModal(false);
+              setShowTotpModal(true);
+              return { success: true };
+            }
+            return res;
+          }}
+          onResend={() => resendOwner2FA(owner2faData.email, owner2faData.preAuthToken)}
+          onSuccess={() => {
+            if (!ownerTotpData) {
+              navigate('/platform-owner/dashboard', { replace: true });
+            }
+          }}
+          onClose={() => setShowOwner2faModal(false)}
+          canDismiss={true}
+        />
+      )}
+
+      {/* Platform Owner Microsoft Authenticator (TOTP) Modal */}
+      {ownerTotpData && (
+        <TotpModal
+          isOpen={showTotpModal}
+          preAuthToken={ownerTotpData.preAuthToken}
+          onVerify={(code) => verifyOwnerTOTP(ownerTotpData.preAuthToken, code)}
+          onSuccess={() => navigate('/platform-owner/dashboard', { replace: true })}
+          onClose={() => {
+            setShowTotpModal(false);
+            setOwnerTotpData(null);
+          }}
+          canDismiss={true}
+        />
+      )}
     </div>
   );
 };

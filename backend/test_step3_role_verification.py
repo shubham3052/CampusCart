@@ -41,8 +41,17 @@ def authenticate(user):
 def clear_auth():
     client.credentials()
 
+from django.conf import settings
+from django.core import mail
+
 def run_role_verification():
     print("=" * 80)
+    print("RUNNING STEP 3 ROLE-BASED ACCESS & FEATURE VERIFICATION SUITE")
+    print("=" * 80)
+
+    # Enforce in-memory email backend
+    settings.EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+    mail.outbox = []
     print("STEP 3: COMPREHENSIVE ROLE-BASED ACCESS & FEATURE VERIFICATION")
     print("=" * 80)
 

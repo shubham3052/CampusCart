@@ -15,7 +15,7 @@ const Navbar = ({
   onSearch,
   onToggleSidebar,
 }) => {
-  const { user } = useAuth();
+  const { user, roles, activeRole, switchRole } = useAuth();
   const navigate = useNavigate();
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -66,7 +66,7 @@ const Navbar = ({
         justifyContent: 'space-between',
         position: 'sticky',
         top: 0,
-        zIndex: 30,
+        zIndex: 50,
         gap: '0.65rem',
         boxSizing: 'border-box',
         width: '100%',
@@ -183,6 +183,49 @@ const Navbar = ({
           )}
         </button>
 
+        {/* Multi-Role Switcher Header Control */}
+        {roles && roles.length > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', marginRight: '0.25rem' }}>
+            <select
+              value={activeRole || user?.role}
+              onChange={async (e) => {
+                const targetRole = e.target.value;
+                if (targetRole && targetRole !== (activeRole || user?.role)) {
+                  await switchRole(targetRole);
+                  if (targetRole === 'PLATFORM_OWNER') navigate('/platform-owner/dashboard');
+                  else if (targetRole === 'ADMIN') navigate('/admin/dashboard');
+                  else if (targetRole === 'SHOP_OWNER') navigate('/shop-owner/dashboard');
+                  else if (targetRole === 'DELIVERY_AGENT') navigate('/delivery-agent/deliveries');
+                  else navigate('/student/home');
+                }
+              }}
+              style={{
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                padding: '0.3rem 0.6rem',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-color)',
+                backgroundColor: 'var(--bg-surface-secondary, #f1f5f9)',
+                color: 'var(--text-primary)',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+              title="Switch Active Portal / Role"
+              aria-label="Switch Active Role"
+            >
+              {roles.map((r) => (
+                <option key={r} value={r}>
+                  {r === 'STUDENT' ? 'Student' :
+                   r === 'SHOP_OWNER' ? 'Shop Owner' :
+                   r === 'DELIVERY_AGENT' ? 'Courier' :
+                   r === 'ADMIN' ? 'Admin' :
+                   r === 'PLATFORM_OWNER' ? 'Platform Owner' : r}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* User preview button navigating to profile */}
         {user && (
           <button
@@ -227,7 +270,7 @@ const Navbar = ({
                 {user.first_name || user.username}
               </span>
               <span style={{ fontSize: '0.72rem', color: 'var(--primary-600)', fontWeight: 600 }}>
-                {user.role}
+                {activeRole || user.role}
               </span>
             </div>
           </button>
